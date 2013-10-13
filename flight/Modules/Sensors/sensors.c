@@ -46,6 +46,10 @@
 #include "magnetometer.h"
 #include "magbias.h"
 #include "coordinate_conversions.h"
+#if defined(PIOS_INCLUDE_CAN_ESC)
+#include "motorfeedback.h"
+#include <candefs.h>
+#endif
 
 // Private constants
 #define STACK_SIZE_BYTES 1000
@@ -58,6 +62,10 @@ enum mag_calibration_algo {
 	MAG_CALIBRATION_PRELEMARI,
 	MAG_CALIBRATION_NORMALIZE_LENGTH
 };
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+extern uintptr_t pios_com_can_id;
+#endif
 
 // Private functions
 static void SensorsTask(void *parameters);
@@ -72,11 +80,17 @@ static void mag_calibration_prelemari(MagnetometerData *mag);
 static void mag_calibration_fix_length(MagnetometerData *mag);
 
 static void updateTemperatureComp(float temperature, float *temp_bias);
+#if defined(PIOS_INCLUDE_CAN_ESC)
+static void updateMotorFeedback();
+#endif
 
 // Private variables
 static xTaskHandle sensorsTaskHandle;
 static INSSettingsData insSettings;
 static AccelsData accelsData;
+#if defined(PIOS_INCLUDE_CAN_ESC)
+static MotorFeedbackData escData;
+#endif
 
 // These values are initialized by settings but can be updated by the attitude algorithm
 static bool bias_correct_gyro = true;
@@ -120,6 +134,9 @@ static int32_t SensorsInitialize(void)
 	AttitudeSettingsInitialize();
 	SensorSettingsInitialize();
 	INSSettingsInitialize();
+#if defined(PIOS_INCLUDE_CAN_ESC)
+	MotorFeedbackInitialize();
+#endif
 
 	rotate = 0;
 
@@ -209,6 +226,10 @@ static void SensorsTask(void *parameters)
 		if (queue != NULL && xQueueReceive(queue, (void *) &baro, 0) != errQUEUE_EMPTY) {
 			update_baro(&baro);
 		}
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+		updateMotorFeedback();
+#endif
 
 		if (good_runs > REQUIRED_GOOD_CYCLES)
 			AlarmsClear(SYSTEMALARMS_ALARM_SENSORS);
@@ -395,6 +416,88 @@ static void updateTemperatureComp(float temperature, float *temp_bias)
 		               gyro_coeff_z[2] * powf(t,2) + gyro_coeff_z[3] * powf(t,3);
 	}
 }
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+// Round to nearest value, keeping 2 decimal places.
+// E.g. 10.1299 -> 10.13
+static float rnd(float val)
+{
+   return floorf(val * 100 + 0.5f) / 100;
+}
+
+static void updateMotorFeedback()
+{
+#define MAX_BLDC_CNT 4
+
+   bool updated = false;
+   uint32_t buf32[3];
+   uint8_t *buf = (uint8_t *) buf32;
+
+   for (;;)
+   {
+      uint16_t bytesRcvd = PIOS_COM_ReceiveBuffer(pios_com_can_id, buf, sizeof(buf32), 0);
+      if (bytesRcvd != 12) break;
+
+      updated = true;
+      uint32_t canExtId = buf32[0];
+      uint64_t payload = (uint64_t) buf32[2] << 32 | buf32[1];
+
+      //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
+
+      uint8_t blcIdx = canExtId & 0xF;
+      if (blcIdx < 0 || blcIdx >= MAX_BLDC_CNT) break;
+
+      /*
+        PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
+        12 bit: Motor current (CentiAmpere, A / 100)
+        12 bit: Battery voltage (CentiVolt, V / 100)
+        12 bit: Motor RPM (Deci-RPM, RPM / 10)
+        12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
+        16 bit: Status word. \sa EBldcStatusWord
+       */
+
+      // Motor current
+      uint16_t tmp = (uint16_t) (payload & 0xFFF);
+      escData.Current[blcIdx] = rnd(tmp / 100.0f);
+
+      // Battery voltage
+      tmp = (uint16_t) ((payload >> 12) & 0xFFF);
+      escData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
+
+      // RPM
+      tmp = (uint16_t) ((payload >> 24) & 0xFFF);
+      escData.RPM[blcIdx] = tmp * 10;
+
+      // Duty cycle
+      tmp = (uint16_t) ((payload >> 36) & 0xFFF);
+      escData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
+
+      // P = (PwmDuty * U) * I
+      escData.PowerConsumption[blcIdx] = rnd((float) tmp / 0xFFF * escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
+
+      // Status word
+      tmp = (uint16_t) (payload >> 48);
+
+      uint8_t *errorFields = NULL;
+      switch (blcIdx)
+      {
+         case 0: errorFields = escData.ErrorESC0; break;
+         case 1: errorFields = escData.ErrorESC1; break;
+         case 2: errorFields = escData.ErrorESC2; break;
+         case 3: errorFields = escData.ErrorESC3; break;
+      }
+
+      if (errorFields == NULL) break;
+
+      for (int i = 0; i < MOTORFEEDBACK_ERRORESC0_NUMELEM; ++i)
+      {
+         errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
+      }
+   }
+
+   if (updated) MotorFeedbackSet(&escData);
+}
+#endif // PIOS_INCLUDE_CAN_ESC
 
 /**
  * Perform an update of the @ref MagBias based on

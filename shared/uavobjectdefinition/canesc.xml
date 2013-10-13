@@ -1,10 +1,19 @@
 <xml>
     <object name="MotorFeedback" singleinstance="true" settings="false">
         <description>Sensor data from brushless motor controllers.</description>
-        <field name="Current" units="A" type="float" elements="4"/>
-        <field name="RPM" units="RPM" type="uint32" elements="4"/>
-        <field name="BatteryVoltage" units="V" type="float" elements="4"/>
+        <field name="Current" units="A" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
+        <field name="RPM" units="RPM" type="uint32" elementnames="ESC0,ESC1,ESC2,ESC3"/>
+        <field name="BatteryVoltage" units="V" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
+        <field name="PWMDuty" units="%" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
+        <field name="PowerConsumption" units="W" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
+ 
+        <field name="ErrorESC0" units="Flag" type="enum" options="FALSE,TRUE" elementnames="HasError,HasOverCurrent,HasUnderVoltage,SpeedRateOverLimit,MotorStalled,NoZeroCrossing" />
+        <field name="ErrorESC1" cloneof="ErrorESC0" />
+        <field name="ErrorESC2" cloneof="ErrorESC0" />
+        <field name="ErrorESC3" cloneof="ErrorESC0" />
+
         <access gcs="readwrite" flight="readwrite"/>
+        
         <telemetrygcs acked="false" updatemode="manual" period="0"/>
         <telemetryflight acked="false" updatemode="periodic" period="1000"/>
         <logging updatemode="manual" period="0"/>

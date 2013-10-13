@@ -31,6 +31,7 @@
 
 #include <stdbool.h>
 
+#define PIOS_INCLUDE_DEBUG_CONSOLE 1
 #if defined(PIOS_INCLUDE_DEBUG_CONSOLE)
 #define DEBUG_LEVEL 0
 #define DEBUG_PRINTF(level, ...) {if(level <= DEBUG_LEVEL && pios_com_debug_id > 0) { PIOS_COM_SendFormattedStringNonBlocking(pios_com_debug_id, __VA_ARGS__); }}

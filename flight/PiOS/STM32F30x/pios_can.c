@@ -35,6 +35,11 @@
 
 #include "pios_can_priv.h"
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+#include <candefs.h>
+#define MY_ADDRESS 0xA
+#endif
+
 /* Provide a COM driver */
 static void PIOS_CAN_RegisterRxCallback(uintptr_t can_id, pios_com_callback rx_in_cb, uintptr_t context);
 static void PIOS_CAN_RegisterTxCallback(uintptr_t can_id, pios_com_callback tx_out_cb, uintptr_t context);
@@ -227,13 +232,21 @@ void CAN1_RX1_IRQHandler(void)
 	CanRxMsg RxMessage;
 	CAN_Receive(CAN1, CAN_FIFO1, &RxMessage);
 
-	if (RxMessage.StdId != CAN_COM_ID)
-		return;
-
 	bool rx_need_yield = false;
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+	// Send the CAN ExtId in the first 4 bytes of the buffer so that the called can use it.
+	uint32_t buf[3];
+	buf[0] = RxMessage.ExtId;
+	memcpy((uint8_t *) (buf + 1), RxMessage.Data, RxMessage.DLC);
+   if (can_dev->rx_in_cb) {
+      (void) (can_dev->rx_in_cb)(can_dev->rx_in_context, (uint8_t *) buf, RxMessage.DLC + 4, NULL, &rx_need_yield);
+   }
+#else
 	if (can_dev->rx_in_cb) {
 		(void) (can_dev->rx_in_cb)(can_dev->rx_in_context, RxMessage.Data, RxMessage.DLC, NULL, &rx_need_yield);
 	}
+#endif
 
 	portEND_SWITCHING_ISR(rx_need_yield);
 }
@@ -254,10 +267,26 @@ void USB_HP_CAN1_TX_IRQHandler(void)
 
 		// Prepare CAN message structure
 		CanTxMsg msg;
+#if defined(PIOS_INCLUDE_CAN_ESC)
+      uint32_t bldcAddrMask = 0xF; // Address all BLDC's
+      uint32_t cmd = CAN_BLDC_CMD_SPEED | CAN_BLDC_SUBCMD_SPEEDOP;
+      uint32_t extId = CAN_RSVD_MASK | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
+            | (cmd << CAN_CMD_SHIFT)
+            | (bldcAddrMask << CAN_SEQ_SHIFT)
+            | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
+            | MY_ADDRESS;
+
+      msg.StdId = 0;
+      msg.ExtId = extId;
+      msg.IDE = CAN_ID_EXT;
+      msg.RTR = CAN_RTR_DATA;
+#else
 		msg.StdId = CAN_COM_ID;
 		msg.ExtId = 0;
 		msg.IDE = CAN_ID_STD;
-		msg.RTR = CAN_RTR_DATA;			
+		msg.RTR = CAN_RTR_DATA;
+#endif // PIOS_INCLUDE_CAN_ESC
+
 		msg.DLC = (can_dev->tx_out_cb)(can_dev->tx_out_context, msg.Data, MAX_SEND_LEN, NULL, &tx_need_yield);
 
 		// Send message and get mailbox number

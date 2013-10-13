@@ -47,6 +47,10 @@
 #include "cameradesired.h"
 #include "manualcontrolcommand.h"
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+extern uintptr_t pios_com_can_id;
+#endif
+
 // Private constants
 #define MAX_QUEUE_SIZE 2
 
@@ -373,10 +377,38 @@ static void actuatorTask(void* parameters)
 		// Update servo outputs
 		bool success = true;
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+      uint8_t buf[8] = { 0 };
+      int blcIdx = 0;
+      for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
+      {
+         if (mixers[n].type == MIXERSETTINGS_MIXER1TYPE_MOTOR
+             && blcIdx < 4)
+         {
+            int16_t val = command.Channel[n];
+            buf[blcIdx * 2] = val & 0xFF;
+            buf[1 + blcIdx * 2] = val >> 8;
+
+            blcIdx++;
+
+            success &= 1;
+
+            //DEBUG_PRINTF(0, "actuator %d val 0x%x\r\n", n, val);
+         }
+         else
+         {
+            success &= set_channel(n, command.Channel[n], &actuatorSettings);
+         }
+      }
+
+      // Send CAN msg
+      if (blcIdx > 0) PIOS_COM_SendBufferNonBlocking(pios_com_can_id, buf, 8);
+#else
 		for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
 		{
 			success &= set_channel(n, command.Channel[n], &actuatorSettings);
 		}
+#endif // PIOS_INCLUDE_CAN_ESC
 
 		if(!success) {
 			command.NumFailedUpdates++;
