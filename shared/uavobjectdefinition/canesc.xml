@@ -1,0 +1,12 @@
+<xml>
+    <object name="MotorFeedback" singleinstance="true" settings="false">
+        <description>Sensor data from brushless motor controllers.</description>
+        <field name="Current" units="A" type="float" elements="4"/>
+        <field name="RPM" units="RPM" type="uint32" elements="4"/>
+        <field name="BatteryVoltage" units="V" type="float" elements="4"/>
+        <access gcs="readwrite" flight="readwrite"/>
+        <telemetrygcs acked="false" updatemode="manual" period="0"/>
+        <telemetryflight acked="false" updatemode="periodic" period="1000"/>
+        <logging updatemode="manual" period="0"/>
+    </object>
+</xml>
