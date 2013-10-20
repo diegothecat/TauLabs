@@ -158,15 +158,21 @@
 #define CAN_BLDC_INFSENSORMSG_LEN 8 // 4 x 12 bit sensor + 16 bit status
 
 
+// Soft errors: Non critical errors. Motor will keep running.
+#define SOFT_ERRORS (ESwInvalidState | ESwSpeedChangeLimitExceeded)
+#define HARD_ERRORS (~SOFT_ERRORS)
+
 // 16 bit status word
 typedef enum
 {
-   ESwError = 0x1, // General error flag
+   ESwGeneralError = 0x1, // Misc. errors
    ESwOvercurrent = 0x2,
    ESwUndervoltage = 0x4,
    ESwSpeedChangeLimitExceeded = 0x8,
    ESwMotorStalled = 0x10,
-   ESwNoZeroCrossing = 0x20
+   ESwNoZeroCrossing = 0x20,
+   ESwDesiredSpeedLimitExceeded = 0x40,
+   ESwInvalidState = 0x80
 } EBldcStatusWord;
 
 #endif /* CANDEFS_H_ */
