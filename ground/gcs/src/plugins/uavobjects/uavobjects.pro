@@ -124,7 +124,9 @@ HEADERS += $$UAVOBJECT_SYNTHETICS/accels.h \
     $$UAVOBJECT_SYNTHETICS/waypoint.h \
     $$UAVOBJECT_SYNTHETICS/waypointactive.h \
     $$UAVOBJECT_SYNTHETICS/windvelocityactual.h \
-    $$UAVOBJECT_SYNTHETICS/motorfeedback.h
+    $$UAVOBJECT_SYNTHETICS/motorfeedback.h \
+    $$UAVOBJECT_SYNTHETICS/canescsettings.h \
+    $$UAVOBJECT_SYNTHETICS/canescsettingscmd.h
 
 SOURCES += $$UAVOBJECT_SYNTHETICS/accels.cpp \
     $$UAVOBJECT_SYNTHETICS/accessorydesired.cpp \
@@ -228,5 +230,7 @@ SOURCES += $$UAVOBJECT_SYNTHETICS/accels.cpp \
     $$UAVOBJECT_SYNTHETICS/waypoint.cpp \
     $$UAVOBJECT_SYNTHETICS/waypointactive.cpp\
     $$UAVOBJECT_SYNTHETICS/windvelocityactual.cpp \
-    $$UAVOBJECT_SYNTHETICS/motorfeedback.cpp
+    $$UAVOBJECT_SYNTHETICS/motorfeedback.cpp \
+    $$UAVOBJECT_SYNTHETICS/canescsettings.cpp \
+    $$UAVOBJECT_SYNTHETICS/canescsettingscmd.cpp
 

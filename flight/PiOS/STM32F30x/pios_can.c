@@ -217,6 +217,23 @@ static void PIOS_CAN_RegisterTxCallback(uintptr_t can_id, pios_com_callback tx_o
 	can_dev->tx_out_cb = tx_out_cb;
 }
 
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_t buflen)
+{
+   if (buflen <= 0) return;
+
+#define BUFLEN 64
+   char buf[BUFLEN];
+
+   uint8_t slen = sprintf(buf, "%s 0x%08x (%d) ", prfx, (unsigned int) extId, buflen);
+   for (int i = 0; i < buflen; ++i) slen += sprintf(buf + slen, "%02x:", canbuf[i]);
+   slen += sprintf(buf + slen, "\r\n");
+
+   PIOS_COM_SendBuffer(pios_com_debug_id, (uint8_t *) buf, slen);
+}
+#endif
+
 /**
  * @brief  This function handles CAN1 RX1 request.
  * @note   We are using RX1 instead of RX0 to avoid conflicts with the
@@ -235,12 +252,15 @@ void CAN1_RX1_IRQHandler(void)
 	bool rx_need_yield = false;
 
 #if defined(PIOS_INCLUDE_CAN_ESC)
-	// Send the CAN ExtId in the first 4 bytes of the buffer so that the called can use it.
+	// Send the CAN ExtId in the first 4 bytes of the buffer so that the calle can use it.
 	uint32_t buf[3];
 	buf[0] = RxMessage.ExtId;
 	memcpy((uint8_t *) (buf + 1), RxMessage.Data, RxMessage.DLC);
+
+	// PrinCanMsg("RX", RxMessage.ExtId, RxMessage.Data, RxMessage.DLC);
+
    if (can_dev->rx_in_cb) {
-      (void) (can_dev->rx_in_cb)(can_dev->rx_in_context, (uint8_t *) buf, RxMessage.DLC + 4, NULL, &rx_need_yield);
+      (void) (can_dev->rx_in_cb)(can_dev->rx_in_context, (uint8_t *) buf, RxMessage.DLC + sizeof(uint32_t), NULL, &rx_need_yield);
    }
 #else
 	if (can_dev->rx_in_cb) {
@@ -267,27 +287,26 @@ void USB_HP_CAN1_TX_IRQHandler(void)
 
 		// Prepare CAN message structure
 		CanTxMsg msg;
-#if defined(PIOS_INCLUDE_CAN_ESC)
-      uint32_t bldcAddrMask = 0xF; // Address all BLDC's
-      uint32_t cmd = CAN_BLDC_CMD_SPEED | CAN_BLDC_SUBCMD_SPEEDOP;
-      uint32_t extId = CAN_RSVD_MASK | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
-            | (cmd << CAN_CMD_SHIFT)
-            | (bldcAddrMask << CAN_SEQ_SHIFT)
-            | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
-            | MY_ADDRESS;
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+		uint32_t buf[3] = { 0 };
+      uint16_t msgLen = (can_dev->tx_out_cb)(can_dev->tx_out_context, (uint8_t *) buf, MAX_SEND_LEN + sizeof(uint32_t), NULL, &tx_need_yield);
+		if (msgLen >= 4) msgLen -= sizeof(uint32_t); // Strip ExtId (passed in first 4 bytes by caller)
+		if (msgLen > 0) memcpy(msg.Data, (uint8_t *) (buf + 1), msgLen);
       msg.StdId = 0;
-      msg.ExtId = extId;
+      msg.ExtId = buf[0];
       msg.IDE = CAN_ID_EXT;
       msg.RTR = CAN_RTR_DATA;
+      msg.DLC = msgLen;
+
+      // PrinCanMsg("TX", msg.ExtId, msg.Data, msg.DLC);
 #else
 		msg.StdId = CAN_COM_ID;
 		msg.ExtId = 0;
 		msg.IDE = CAN_ID_STD;
 		msg.RTR = CAN_RTR_DATA;
-#endif // PIOS_INCLUDE_CAN_ESC
-
 		msg.DLC = (can_dev->tx_out_cb)(can_dev->tx_out_context, msg.Data, MAX_SEND_LEN, NULL, &tx_need_yield);
+#endif // PIOS_INCLUDE_CAN_ESC
 
 		// Send message and get mailbox number
 		if (msg.DLC > 0) {

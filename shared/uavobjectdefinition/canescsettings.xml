@@ -1,0 +1,27 @@
+<xml>
+    <object name="CanEscSettings" singleinstance="true" settings="false">
+        <description>CAN-ESC Settings</description>
+        <!--field name="UpdateCmd" units="" type="enum" options="None,RequestCfg,UpdateAll,UpdateThis" elements="1"/-->
+        <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn" />
+
+        <field name="MotorPolePairs" units="" type="uint8" elements="1" defaultvalue="0"/>
+        <field name="MotorKv" units="RPM/V" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="MotorMaxCurrent" units="A" type="float" elements="1" defaultvalue="0"/>
+        <field name="MotorMaxPower" units="W" type="uint16" elements="1" defaultvalue="0"/>
+ 
+        <field name="MaxAcceleration" units="Ticks/ms^2" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="MaxCycleTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="StartAlignTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="RampUpTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+
+        <field name="MinPWM" units="%" type="float" elements="1" defaultvalue="0.0"/>
+        <field name="MaxPWM" units="%" type="float" elements="1" defaultvalue="0.0"/>
+        <field name="MinBatVoltage" units="V" type="float" elements="1" defaultvalue="0.0"/>
+
+        <access gcs="readwrite" flight="readwrite"/>
+        
+        <telemetrygcs acked="false" updatemode="onchange" period="0"/>
+        <telemetryflight acked="false" updatemode="onchange" period="0"/>
+        <logging updatemode="manual" period="0"/>
+    </object>
+</xml>

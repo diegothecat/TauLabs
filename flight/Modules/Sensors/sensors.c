@@ -48,7 +48,13 @@
 #include "coordinate_conversions.h"
 #if defined(PIOS_INCLUDE_CAN_ESC)
 #include "motorfeedback.h"
+#include "canescsettings.h"
+#endif
+
+// Shared headers
+#if defined(PIOS_INCLUDE_CAN_ESC)
 #include <candefs.h>
+#include <utils.h>
 #endif
 
 // Private constants
@@ -63,10 +69,6 @@ enum mag_calibration_algo {
 	MAG_CALIBRATION_NORMALIZE_LENGTH
 };
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-extern uintptr_t pios_com_can_id;
-#endif
-
 // Private functions
 static void SensorsTask(void *parameters);
 static void settingsUpdatedCb(UAVObjEvent * objEv);
@@ -80,16 +82,30 @@ static void mag_calibration_prelemari(MagnetometerData *mag);
 static void mag_calibration_fix_length(MagnetometerData *mag);
 
 static void updateTemperatureComp(float temperature, float *temp_bias);
+
 #if defined(PIOS_INCLUDE_CAN_ESC)
-static void updateMotorFeedback();
+static void ProcessCanEscMsgs();
 #endif
 
 // Private variables
 static xTaskHandle sensorsTaskHandle;
 static INSSettingsData insSettings;
 static AccelsData accelsData;
+
 #if defined(PIOS_INCLUDE_CAN_ESC)
 static MotorFeedbackData escData;
+static CanEscSettingsData escSettingsData;
+
+typedef struct
+{
+   uint8_t LastCfgSeqNo;
+   uint8_t BytesRcvd;
+   uint8_t PayloadLen;
+   uint8_t Buf[CAN_CFG_BUFLEN];
+   uint8_t *BufPtr;
+} CfgMsgState;
+
+static CfgMsgState gCfgMsgState[MAX_CANESC_CNT];
 #endif
 
 // These values are initialized by settings but can be updated by the attitude algorithm
@@ -134,6 +150,7 @@ static int32_t SensorsInitialize(void)
 	AttitudeSettingsInitialize();
 	SensorSettingsInitialize();
 	INSSettingsInitialize();
+
 #if defined(PIOS_INCLUDE_CAN_ESC)
 	MotorFeedbackInitialize();
 #endif
@@ -176,7 +193,6 @@ static void SensorsTask(void *parameters)
 
 	UAVObjEvent ev;
 	settingsUpdatedCb(&ev);
-
 
 	// Main task loop
 	lastSysTime = xTaskGetTickCount();
@@ -228,7 +244,7 @@ static void SensorsTask(void *parameters)
 		}
 
 #if defined(PIOS_INCLUDE_CAN_ESC)
-		updateMotorFeedback();
+		ProcessCanEscMsgs();
 #endif
 
 		if (good_runs > REQUIRED_GOOD_CYCLES)
@@ -418,6 +434,7 @@ static void updateTemperatureComp(float temperature, float *temp_bias)
 }
 
 #if defined(PIOS_INCLUDE_CAN_ESC)
+
 // Round to nearest value, keeping 2 decimal places.
 // E.g. 10.1299 -> 10.13
 static float rnd(float val)
@@ -425,77 +442,253 @@ static float rnd(float val)
    return floorf(val * 100 + 0.5f) / 100;
 }
 
-static void updateMotorFeedback()
+static void UpdateCanEscFeedback(uint32_t ubuf[3])
 {
-#define MAX_BLDC_CNT 4
+   uint32_t canExtId = ubuf[0];
+   uint64_t payload = (uint64_t) ubuf[2] << 32 | ubuf[1];
 
-   bool updated = false;
-   uint32_t buf32[3];
-   uint8_t *buf = (uint8_t *) buf32;
+   //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
+
+   uint8_t blcIdx = canExtId & 0xF;
+   if (blcIdx < 0 || blcIdx >= MAX_CANESC_CNT) return;
+
+   /*
+     PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
+     12 bit: Motor current (CentiAmpere, A / 100)
+     12 bit: Battery voltage (CentiVolt, V / 100)
+     12 bit: Motor RPM (Deci-RPM, RPM / 10)
+     12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
+     16 bit: Status word. \sa EBldcStatusWord
+    */
+
+   // Motor current
+   uint16_t tmp = (uint16_t) (payload & 0xFFF);
+   escData.Current[blcIdx] = rnd(tmp / 100.0f);
+
+   // Battery voltage
+   tmp = (uint16_t) ((payload >> 12) & 0xFFF);
+   escData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
+
+   // RPM
+   tmp = (uint16_t) ((payload >> 24) & 0xFFF);
+   escData.RPM[blcIdx] = tmp * 10;
+
+   // Duty cycle
+   tmp = (uint16_t) ((payload >> 36) & 0xFFF);
+   escData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
+
+   // P = (PwmDuty * U) * I
+   escData.PowerConsumption[blcIdx] = rnd((float) tmp / 0xFFF * escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
+
+   // Status word
+   tmp = (uint16_t) (payload >> 48);
+
+   uint8_t *errorFields = NULL;
+   switch (blcIdx)
+   {
+      case 0: errorFields = escData.ErrorESC0; break;
+      case 1: errorFields = escData.ErrorESC1; break;
+      case 2: errorFields = escData.ErrorESC2; break;
+      case 3: errorFields = escData.ErrorESC3; break;
+   }
+
+   if (errorFields == NULL) return;
+
+   for (int i = 0; i < MOTORFEEDBACK_ERRORESC0_NUMELEM; ++i)
+   {
+      errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
+   }
+
+   MotorFeedbackSet(&escData);
+}
+
+static bool DesequenceCanCfgMsg(uint32_t ubuf[3], uint8_t buflen, uint8_t *escIdx)
+{
+   uint32_t canExtId = ubuf[0];
+   uint8_t seqNo = (canExtId >> CAN_CMD_SHIFT) & 0xF;
+   uint8_t *bufp = (uint8_t *) (ubuf + 1);
+   buflen -= sizeof(uint32_t); // Strip extid
+   *escIdx = canExtId & 0xF;
+
+   if (*escIdx >= MAX_CANESC_CNT) return false;
+
+   CfgMsgState *msgState = gCfgMsgState + *escIdx;
+
+   if (seqNo == 0)
+   {
+      msgState->BufPtr = msgState->Buf;
+      msgState->BytesRcvd = 0;
+      msgState->PayloadLen = bufp[0];
+   }
+   else if (seqNo != msgState->LastCfgSeqNo + 1)
+   {
+      return false; // Sequence error
+   }
+
+   msgState->BytesRcvd += buflen;
+   if (msgState->BytesRcvd > CAN_CFG_BUFLEN)
+   {
+      return false; // Shouldn't happen
+   }
+
+   memcpy(msgState->BufPtr, bufp, buflen);
+
+   msgState->BufPtr += buflen;
+   msgState->LastCfgSeqNo = seqNo;
+
+   if (msgState->BytesRcvd == msgState->PayloadLen)
+   {
+      return true;
+   }
+
+   return false;
+}
+
+inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint16_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = UnalignedRd16(src);
+      return 2;
+   }
+   return 0;
+}
+
+inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint16_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = *src;
+      return 1;
+   }
+   return 0;
+}
+
+static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
+{
+   uint8_t buf8;
+   uint16_t buf16;
+
+   memset(cfg, 0, sizeof(CanEscSettingsData));
+
+   uint8_t *bufp = buf;
+
+   // Skip payload length field (1 Byte)
+   bufp++;
+
+   // ValidMask
+   uint16_t validMask = UnalignedRd16(bufp);
+   bufp += 2;
+
+   // Flags
+   if (Decode8(&buf8, bufp, validMask, EFlFlags))
+   {
+      bufp++;
+      if (buf8 & ECfUartEn) cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] = 1;
+      if (buf8 & ECfBrakeEn) cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] = 1;
+   }
+
+   // MotorPolePairs
+   bufp += Decode8(&cfg->MotorPolePairs, bufp, validMask, EFlMotorPolePairs);
+
+   // MotorKv
+   bufp += Decode16(&cfg->MotorKv, bufp, validMask, EFlMotorKv);
+
+   // MotorMaxCurrentMa
+   if (Decode16(&buf16, bufp, validMask, EFlMotorMaxCurrentMa))
+   {
+      bufp += 2;
+      cfg->MotorMaxCurrent = buf16 / 1000.0f;
+   }
+
+   // MotorMaxPower
+   bufp += Decode16(&cfg->MotorMaxPower, bufp, validMask, EflMotorMaxPower);
+
+   // MaxAcceleration
+   bufp += Decode16(&cfg->MaxAcceleration, bufp, validMask, EflMaxAcceleration);
+
+   // MaxCycleTimeMs
+   if (Decode8(&buf8, bufp, validMask, EFlMaxCycleTimeMs))
+   {
+      bufp++;
+      cfg->MaxCycleTime = buf8;
+   }
+
+   // StartAlignTimeMs
+   bufp += Decode16(&cfg->StartAlignTime, bufp, validMask, EFlStartAlignTimeMs);
+
+   // RampUpTimeMs
+   bufp += Decode16(&cfg->RampUpTime, bufp, validMask, EFlRampUpTimeMs);
+
+   // MinPwmPerMil
+   if (Decode16(&buf16, bufp, validMask, EFlMinPwmPerMil))
+   {
+      bufp += 2;
+      cfg->MinPWM = buf16 / 10.0f;
+   }
+
+   // MaxPwmPerMil
+   if (Decode16(&buf16, bufp, validMask, EFlMaxPwmPerMil))
+   {
+      bufp += 2;
+      cfg->MaxPWM = buf16 / 10.0f;
+   }
+
+   // MinBatVoltageMv
+   if (Decode16(&buf16, bufp, validMask, EFlMinBatVoltageMv))
+   {
+      bufp += 2;
+      cfg->MinBatVoltage = buf16 / 1000.0f;
+   }
+}
+
+void PrintEscSettings(CanEscSettingsData *cfg);
+
+static void UpdateCanEscSettings(uint32_t ubuf[3], uint8_t buflen)
+{
+   uint8_t updatedEscIdx;
+   if (DesequenceCanCfgMsg(ubuf, buflen, &updatedEscIdx))
+   {
+      // Received a complete configuration msg
+
+      CanEscSettingsSetDefaults(CanEscSettingsHandle(), 0);
+      CanEscSettingsGet(&escSettingsData);
+      DecodeCanSettingsMsg(gCfgMsgState[updatedEscIdx].Buf, &escSettingsData);
+
+      // PrintEscSettings(&escSettingsData);
+
+      CanEscSettingsSet(&escSettingsData);
+   }
+}
+
+static void ProcessCanEscMsgs()
+{
+   uint32_t ubuf[3];
+   uint8_t *bufp = (uint8_t *) ubuf;
 
    for (;;)
    {
-      uint16_t bytesRcvd = PIOS_COM_ReceiveBuffer(pios_com_can_id, buf, sizeof(buf32), 0);
-      if (bytesRcvd != 12) break;
+      uint16_t bytesRcvd = PIOS_COM_ReceiveBuffer(pios_com_can_id, bufp, sizeof(ubuf), 0);
+      if (bytesRcvd <= 4) break;
 
-      updated = true;
-      uint32_t canExtId = buf32[0];
-      uint64_t payload = (uint64_t) buf32[2] << 32 | buf32[1];
+      uint32_t canExtId = ubuf[0];
+      uint8_t cmd = ((canExtId & CAN_CMD_MASK) >> CAN_CMD_SHIFT) & 0xF0;
 
-      //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
-
-      uint8_t blcIdx = canExtId & 0xF;
-      if (blcIdx < 0 || blcIdx >= MAX_BLDC_CNT) break;
-
-      /*
-        PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
-        12 bit: Motor current (CentiAmpere, A / 100)
-        12 bit: Battery voltage (CentiVolt, V / 100)
-        12 bit: Motor RPM (Deci-RPM, RPM / 10)
-        12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
-        16 bit: Status word. \sa EBldcStatusWord
-       */
-
-      // Motor current
-      uint16_t tmp = (uint16_t) (payload & 0xFFF);
-      escData.Current[blcIdx] = rnd(tmp / 100.0f);
-
-      // Battery voltage
-      tmp = (uint16_t) ((payload >> 12) & 0xFFF);
-      escData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
-
-      // RPM
-      tmp = (uint16_t) ((payload >> 24) & 0xFFF);
-      escData.RPM[blcIdx] = tmp * 10;
-
-      // Duty cycle
-      tmp = (uint16_t) ((payload >> 36) & 0xFFF);
-      escData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
-
-      // P = (PwmDuty * U) * I
-      escData.PowerConsumption[blcIdx] = rnd((float) tmp / 0xFFF * escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
-
-      // Status word
-      tmp = (uint16_t) (payload >> 48);
-
-      uint8_t *errorFields = NULL;
-      switch (blcIdx)
+      switch (cmd)
       {
-         case 0: errorFields = escData.ErrorESC0; break;
-         case 1: errorFields = escData.ErrorESC1; break;
-         case 2: errorFields = escData.ErrorESC2; break;
-         case 3: errorFields = escData.ErrorESC3; break;
-      }
-
-      if (errorFields == NULL) break;
-
-      for (int i = 0; i < MOTORFEEDBACK_ERRORESC0_NUMELEM; ++i)
-      {
-         errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
+         case CAN_BLDC_CMD_CFG:
+         {
+            UpdateCanEscSettings(ubuf, bytesRcvd);
+            break;
+         }
+         case CAN_BLDC_CMD_INF:
+         {
+            if (bytesRcvd != 12) break;
+            UpdateCanEscFeedback(ubuf);
+            break;
+         }
       }
    }
-
-   if (updated) MotorFeedbackSet(&escData);
 }
 #endif // PIOS_INCLUDE_CAN_ESC
 

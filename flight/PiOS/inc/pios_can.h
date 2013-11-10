@@ -31,6 +31,15 @@
 #if !defined(PIOS_CAN_H)
 #define PIOS_CAN_H
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+
+#define MAX_CANESC_CNT 4
+#define MY_CAN_ADDRESS 0xA
+
+extern uintptr_t pios_com_can_id;
+
+#endif
+
 #endif /* PIOS_CAN_H */
 
 /**

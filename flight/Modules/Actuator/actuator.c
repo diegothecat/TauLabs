@@ -46,9 +46,11 @@
 #include "mixerstatus.h"
 #include "cameradesired.h"
 #include "manualcontrolcommand.h"
-
 #if defined(PIOS_INCLUDE_CAN_ESC)
-extern uintptr_t pios_com_can_id;
+#include "canescsettings.h"
+#include "canescsettingscmd.h"
+#include <candefs.h>
+#include <utils.h>
 #endif
 
 // Private constants
@@ -64,7 +66,17 @@ extern uintptr_t pios_com_can_id;
 #define FAILSAFE_TIMEOUT_MS 100
 #define MAX_MIX_ACTUATORS ACTUATORCOMMAND_CHANNEL_NUMELEM
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+#define MIN(x,y) ((x) < (y) ? (x) : (y))
+#endif
+
 // Private types
+
+//this structure is equivalent to the UAVObjects for one mixer.
+typedef struct {
+   uint8_t type;
+   int8_t matrix[5];
+} __attribute__((packed)) Mixer_t;
 
 
 // Private variables
@@ -78,6 +90,12 @@ static volatile bool actuator_settings_updated;
 // used to inform the actuator thread that mixer settings are changed
 static volatile bool mixer_settings_updated;
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+static volatile bool canesc_settingscmd_updated;
+static volatile bool canesc_settings_updated;
+static CanEscSettingsCmdData canEscUpdateCmd;
+#endif
+
 // Private functions
 static void actuatorTask(void* parameters);
 static int16_t scaleChannel(float value, int16_t max, int16_t min, int16_t neutral);
@@ -86,16 +104,24 @@ static float MixerCurve(const float throttle, const float* curve, uint8_t elemen
 static bool set_channel(uint8_t mixer_channel, uint16_t value, const ActuatorSettingsData * actuatorSettings);
 static void actuator_update_rate_if_changed(const ActuatorSettingsData * actuatorSettings, bool force_update);
 static void MixerSettingsUpdatedCb(UAVObjEvent * ev);
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+static void CanEscInit();
+static void CanEscStart();
+static void CanEscSettingsCmdUpdatedCb(UAVObjEvent * ev);
+static void CanEscSettingsUpdatedCb(UAVObjEvent * ev);
+static void CanEscRequestConfig(uint8_t escAddr);
+static void CanEscProcessSettingsCmd();
+static void CanEscProcessSettings();
+static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], ActuatorSettingsData *actuatorSettings);
+static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf);
+static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
+#endif
+
 static void ActuatorSettingsUpdatedCb(UAVObjEvent * ev);
 float ProcessMixer(const int index, const float curve1, const float curve2,
 		   const MixerSettingsData* mixerSettings, ActuatorDesiredData* desired,
 		   const float period);
-
-//this structure is equivalent to the UAVObjects for one mixer.
-typedef struct {
-	uint8_t type;
-	int8_t matrix[5];
-} __attribute__((packed)) Mixer_t;
 
 /**
  * @brief Module initialization
@@ -107,6 +133,10 @@ int32_t ActuatorStart()
 	xTaskCreate(actuatorTask, (signed char*)"Actuator", STACK_SIZE_BYTES/4, NULL, TASK_PRIORITY, &taskHandle);
 	TaskMonitorAdd(TASKINFO_RUNNING_ACTUATOR, taskHandle);
 	PIOS_WDG_RegisterFlag(PIOS_WDG_ACTUATOR);
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+	CanEscStart();
+#endif
 
 	return 0;
 }
@@ -124,6 +154,10 @@ int32_t ActuatorInitialize()
 	// Register for notification of changes to MixerSettings
 	MixerSettingsInitialize();
 	MixerSettingsConnectCallback(MixerSettingsUpdatedCb);
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+	CanEscInit();
+#endif
 
 	// Listen for ActuatorDesired updates (Primary input to this module)
 	ActuatorDesiredInitialize();
@@ -177,6 +211,11 @@ static void actuatorTask(void* parameters)
 	mixer_settings_updated = false;
 	MixerSettingsGet(&mixerSettings);
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+	canesc_settings_updated = false;
+   canesc_settingscmd_updated = false;
+#endif
+
 	/* Force an initial configuration of the actuator update rates */
 	actuator_update_rate_if_changed(&actuatorSettings, true);
 
@@ -202,6 +241,19 @@ static void actuatorTask(void* parameters)
 			mixer_settings_updated = false;
 			MixerSettingsGet (&mixerSettings);
 		}
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+      if (canesc_settingscmd_updated)
+      {
+         canesc_settingscmd_updated = false;
+         CanEscProcessSettingsCmd();
+      }
+      if (canesc_settings_updated)
+      {
+         canesc_settings_updated = false;
+         CanEscProcessSettings();
+      }
+#endif
 
 		if (rc != pdTRUE) {
 			/* Update of ActuatorDesired timed out.  Go to failsafe */
@@ -376,33 +428,8 @@ static void actuatorTask(void* parameters)
 
 		// Update servo outputs
 		bool success = true;
-
 #if defined(PIOS_INCLUDE_CAN_ESC)
-      uint8_t buf[8] = { 0 };
-      int blcIdx = 0;
-      for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
-      {
-         if (mixers[n].type == MIXERSETTINGS_MIXER1TYPE_MOTOR
-             && blcIdx < 4)
-         {
-            int16_t val = command.Channel[n];
-            buf[blcIdx * 2] = val & 0xFF;
-            buf[1 + blcIdx * 2] = val >> 8;
-
-            blcIdx++;
-
-            success &= 1;
-
-            //DEBUG_PRINTF(0, "actuator %d val 0x%x\r\n", n, val);
-         }
-         else
-         {
-            success &= set_channel(n, command.Channel[n], &actuatorSettings);
-         }
-      }
-
-      // Send CAN msg
-      if (blcIdx > 0) PIOS_COM_SendBufferNonBlocking(pios_com_can_id, buf, 8);
+		success = CanEscSendDesiredSpeedMsg(command.Channel, mixers, &actuatorSettings);
 #else
 		for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
 		{
@@ -418,8 +445,6 @@ static void actuatorTask(void* parameters)
 
 	}
 }
-
-
 
 /**
  *Process mixing for one actuator
@@ -761,6 +786,248 @@ static void MixerSettingsUpdatedCb(UAVObjEvent * ev)
 {
 	mixer_settings_updated = true;
 }
+
+
+/******************************************************************************
+ * CAN ESC
+ ******************************************************************************/
+
+#if defined(PIOS_INCLUDE_CAN_ESC)
+
+static void CanEscInit()
+{
+   CanEscSettingsCmdInitialize();
+   CanEscSettingsCmdConnectCallback(CanEscSettingsCmdUpdatedCb);
+
+   CanEscSettingsInitialize();
+   CanEscSettingsConnectCallback(CanEscSettingsUpdatedCb);
+}
+
+static void CanEscStart()
+{
+}
+
+static void CanEscSettingsCmdUpdatedCb(UAVObjEvent * ev)
+{
+   canesc_settingscmd_updated = true;
+}
+
+static void CanEscSettingsUpdatedCb(UAVObjEvent * ev)
+{
+   canesc_settings_updated = true;
+}
+
+static void CanEscProcessSettings()
+{
+}
+
+static void CanEscProcessSettingsCmd()
+{
+   CanEscSettingsCmdGet(&canEscUpdateCmd);
+
+   canEscUpdateCmd.EscAddr &= 0xF;
+
+   // PrintEscSettings(&cfg);
+
+   if (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_REQUESTCFG)
+   {
+      CanEscSettingsSetDefaults(CanEscSettingsHandle(), 0);
+      CanEscRequestConfig(canEscUpdateCmd.EscAddr);
+   }
+   else if (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATEALL || canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATETHIS)
+   {
+      CanEscSettingsData escSettings;
+      CanEscSettingsGet(&escSettings); // User should manually update the UAV obj.
+
+      uint8_t buf[CAN_CFG_BUFLEN];
+      uint16_t buflen = CanEscEncodeSettings(&escSettings, buf);
+
+      CanEscSendSettings(buf, buflen,
+         (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATETHIS) ? canEscUpdateCmd.EscAddr : 0xFF);
+   }
+}
+
+static void CanEscRequestConfig(uint8_t escAddr)
+{
+   uint8_t buf[5] = { 0 };
+
+   // Request configuration from specific ESC
+   uint32_t extId = CAN_RSVD_MASK
+          | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
+          | (CAN_BLDC_CMD_CFGREQ << CAN_CMD_SHIFT)
+          | (escAddr << CAN_CMDARG_SHIFT)
+          | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
+          | MY_CAN_ADDRESS;
+
+   UnalignedWr32(extId, buf);
+
+   // Send one dummy payload Byte to make the PIOS CAN driver happy!
+   PIOS_COM_SendBuffer(pios_com_can_id, buf, sizeof(buf));
+}
+
+static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], ActuatorSettingsData *actuatorSettings)
+{
+   bool success = false;
+   uint32_t ubuf[3] = { 0 };
+   uint8_t *bufp = (uint8_t *) (ubuf + 1);
+   uint8_t bldcAddrMask = 0xF; // Address all ESC's
+   uint8_t cmd = CAN_BLDC_CMD_SPEED | CAN_BLDC_SUBCMD_SPEEDOP;
+   uint32_t extId = CAN_RSVD_MASK | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
+         | ((uint32_t) cmd << CAN_CMD_SHIFT)
+         | ((uint32_t) bldcAddrMask << CAN_CMDARG_SHIFT)
+         | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
+         | MY_CAN_ADDRESS;
+   ubuf[0] = extId;
+   int escIdx = 0;
+
+   for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
+   {
+      if (mixers[n].type == MIXERSETTINGS_MIXER1TYPE_MOTOR && escIdx < MAX_CANESC_CNT)
+      {
+         int16_t val = channel[n];
+         bufp[escIdx * 2] = val & 0xFF;
+         bufp[escIdx + 1 * 2] = val >> 8;
+
+         escIdx++;
+         success &= 1;
+      }
+      else
+      {
+         success &= set_channel(n, channel[n], actuatorSettings);
+      }
+   }
+
+   // Send CAN msg
+   if (escIdx > 0)  PIOS_COM_SendBufferNonBlocking(pios_com_can_id, (uint8_t *) ubuf, sizeof(ubuf));
+
+   return success;
+}
+
+static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
+{
+   uint8_t *bufp = buf;
+
+   // Allocate room for the payload length field (1 Byte)
+   bufp++;
+
+   // ValidMask
+   bufp = UnalignedWr16(EFlFlags | EFlMotorPolePairs | EFlMotorKv | EFlMotorMaxCurrentMa | EflMotorMaxPower
+         |  EflMaxAcceleration | EFlMaxCycleTimeMs | EFlStartAlignTimeMs | EFlRampUpTimeMs
+         | EFlMinPwmPerMil | EFlMaxPwmPerMil | EFlMinBatVoltageMv, bufp);
+
+   // Flags
+   *(uint8_t *) bufp = (cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
+         | (cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] ? ECfBrakeEn : 0);
+   bufp++;
+
+   // MotorPolePairs
+   *(uint8_t *) bufp = cfg->MotorPolePairs;
+   bufp++;
+
+   // MotorKv
+   bufp = UnalignedWr16(cfg->MotorKv, bufp);
+
+   // MotorMaxCurrentMa
+   bufp = UnalignedWr16((uint16_t) (cfg->MotorMaxCurrent * 1000.0f + 0.5f), bufp);
+
+   // MotorMaxPower
+   bufp = UnalignedWr16(cfg->MotorMaxPower, bufp);
+
+   // MaxAcceleration
+   bufp = UnalignedWr16(cfg->MaxAcceleration, bufp);
+
+   // MaxCycleTimeMs
+   *(uint8_t *) bufp = (uint8_t) cfg->MaxCycleTime;
+   bufp++;
+
+   // StartAlignTimeMs
+   bufp = UnalignedWr16(cfg->StartAlignTime, bufp);
+
+   // RampUpTimeMs
+   bufp = UnalignedWr16(cfg->RampUpTime, bufp);
+
+   // MinPwmPerMil
+   bufp = UnalignedWr16((uint16_t) (cfg->MinPWM * 10.0f + 0.5f), bufp);
+
+   // MaxPwmPerMil
+   bufp = UnalignedWr16((uint16_t) (cfg->MaxPWM * 10.0f + 0.5f), bufp);
+
+   // MinBatVoltageMv
+   bufp = UnalignedWr16((uint16_t) (cfg->MinBatVoltage * 1000.0f + 0.5f), bufp);
+
+   // Store payload length in first byte of the payload
+   *buf = bufp - buf;
+
+   return *buf;
+}
+
+static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
+{
+   uint8_t *bufp = buf;
+   uint8_t msgLen;
+   uint32_t msgBuf[3];
+   uint32_t extId;
+   uint8_t cmd;
+
+   for (int i = 0; buflen > 0; ++i)
+   {
+      msgLen = MIN(buflen, CAN_MAX_PAYLOADLEN);
+
+      cmd = CAN_BLDC_CMD_CFG | (i & 0XF);
+      extId = CAN_RSVD_MASK
+            | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
+            | ((uint32_t) cmd << CAN_CMD_SHIFT)
+            | ((uint32_t) escAddr << CAN_CMDARG_SHIFT)
+            | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
+            | MY_CAN_ADDRESS;
+
+      msgBuf[0] = extId;
+      memcpy((uint8_t *)(msgBuf + 1), bufp, msgLen);
+
+      // Send CAN msg (block if buffer is full)
+      PIOS_COM_SendBuffer(pios_com_can_id, (uint8_t *) msgBuf, msgLen + sizeof(uint32_t));
+
+      bufp += msgLen;
+      buflen -= msgLen;
+   }
+}
+
+void PrintEscSettings(CanEscSettingsData *cfg)
+{
+   // Send buffer is limited to 128 Byte. Print out in chunks.
+   PIOS_COM_SendFormattedString(pios_com_debug_id,
+           "CAN-ESC Configuration:\r\n"
+           " MotorPolePairs         %d\r\n"
+           " MotorKv                %d\r\n",
+           cfg->MotorPolePairs,
+           cfg->MotorKv);
+
+   PIOS_COM_SendFormattedString(pios_com_debug_id,
+           " MotorMaxCurrentMa      %d\r\n"
+           " MotorMaxPower          %d\r\n"
+           " MaxAcceleration        %d\r\n",
+         (uint16_t) (cfg->MotorMaxCurrent * 1000.0f + 0.5f),
+         cfg->MotorMaxPower,
+         cfg->MaxAcceleration);
+
+   PIOS_COM_SendFormattedString(pios_com_debug_id,
+           " MaxCycleTimeMs         %d\r\n"
+           " StartAlignTimeMs       %d\r\n"
+           " RampUpTimeMs           %d\r\n",
+           cfg->MaxCycleTime,
+           cfg->StartAlignTime,
+           cfg->RampUpTime);
+
+   PIOS_COM_SendFormattedString(pios_com_debug_id,
+           " MinPwmPerMil           %d\r\n"
+           " MaxPwmPerMil           %d\r\n"
+           " MinBatVoltageMv        %d\r\n",
+           (uint16_t) (cfg->MinPWM * 100.0f + 0.5f),
+           (uint16_t) (cfg->MaxPWM * 100.0f + 0.5f),
+           (uint16_t) (cfg->MinBatVoltage * 1000.0f + 0.5f) );
+}
+
+#endif // PIOS_INCLUDE_CAN_ESC
 
 /**
  * @}
