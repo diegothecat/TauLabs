@@ -227,24 +227,40 @@ typedef enum
 {
    ECfUartEn = 0x1, // Enable debug output on UART
    ECfBrakeEn = 0x2, // Brake motor on stop
-   ECfSaveToEeprom = 0x4, // Save configuration to EEPROM
+   ECfLoadDefaults = 0x4, // Load hardcoded defaults
 } ECanCfgFlag;
 
 typedef enum // If bit is set, corresponding variable is present
 {
-   EFlFlags = 0x1,
-   EFlMotorPolePairs = 0x2,
-   EFlMotorKv = 0x4,
-   EFlMotorMaxCurrentMa = 0x8,
-   EflMotorMaxPower = 0x10,
-   EflMaxAcceleration = 0x20,
-   EFlMaxCycleTimeMs = 0x40,
-   EFlStartAlignTimeMs = 0x80,
-   EFlRampUpTimeMs = 0x100,
-   EFlMinPwmPerMil = 0x200,
-   EFlMaxPwmPerMil = 0x400,
-   EFlMinBatVoltageMv = 0x800
+   EFlFlags = 1 << 0,
+
+   EFlMotorPolePairs = 1 << 1,
+   EFlMotorKv = 1 << 2,
+   EFlMotorMaxCurrentMa = 1 << 3,
+   EflMotorMaxPower = 1 << 4,
+
+   EflMaxAcceleration = 1 << 5,
+   EFlMaxCycleTimeMs = 1 << 6,
+
+   EFlAlignTimeMs = 1 << 7,
+   EFlAlignCurrentMa = 1 << 8,
+
+   EFlRampUpTimeMs = 1 << 9,
+   EFlRampUpStartPeriodUs = 1 << 10,
+   EFlRampUpEndPeriodUs = 1 << 11,
+
+   EFlMinPwmPerMil = 1 << 12,
+   EFlMaxPwmPerMil = 1 << 13,
+   EFlMinBatVoltageMv = 1 << 14
 } ECanCfgValidFlag;
+
+#define CAN_CFG_VALIDFLAGS_ALLMSK ( \
+    EFlFlags \
+  | EFlMotorPolePairs | EFlMotorKv | EFlMotorMaxCurrentMa | EflMotorMaxPower \
+  | EflMaxAcceleration | EFlMaxCycleTimeMs \
+  | EFlAlignTimeMs | EFlAlignCurrentMa \
+  | EFlRampUpTimeMs | EFlRampUpStartPeriodUs | EFlRampUpEndPeriodUs \
+  | EFlMinPwmPerMil | EFlMaxPwmPerMil | EFlMinBatVoltageMv )
 
 // CAN_BLDC_CMD_INF
 #define CAN_BLDC_INFSENSORMSG_LEN 8 // 4 x 12 bit sensor + 16 bit status

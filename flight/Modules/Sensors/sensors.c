@@ -46,6 +46,7 @@
 #include "magnetometer.h"
 #include "magbias.h"
 #include "coordinate_conversions.h"
+
 #if defined(PIOS_INCLUDE_CAN_ESC)
 #include "motorfeedback.h"
 #include "canescsettings.h"
@@ -477,8 +478,8 @@ static void UpdateCanEscFeedback(uint32_t ubuf[3])
    tmp = (uint16_t) ((payload >> 36) & 0xFFF);
    escData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
 
-   // P = (PwmDuty * U) * I
-   escData.PowerConsumption[blcIdx] = rnd((float) tmp / 0xFFF * escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
+   // P = U * I
+   escData.PowerConsumption[blcIdx] = rnd(escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
 
    // Status word
    tmp = (uint16_t) (payload >> 48);
@@ -614,11 +615,20 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
       cfg->MaxCycleTime = buf8;
    }
 
-   // StartAlignTimeMs
-   bufp += Decode16(&cfg->StartAlignTime, bufp, validMask, EFlStartAlignTimeMs);
+   // AlignTimeMs
+   bufp += Decode16(&cfg->AlignTime, bufp, validMask, EFlAlignTimeMs);
+
+   // AlignCurrentMa
+   bufp += Decode16(&cfg->AlignCurrent, bufp, validMask, EFlAlignCurrentMa);
 
    // RampUpTimeMs
    bufp += Decode16(&cfg->RampUpTime, bufp, validMask, EFlRampUpTimeMs);
+
+   // RampUpStartPeriod
+   bufp += Decode16(&cfg->RampUpStartPeriod, bufp, validMask, EFlRampUpStartPeriodUs);
+
+   // RampUpEndPeriod
+   bufp += Decode16(&cfg->RampUpEndPeriod, bufp, validMask, EFlRampUpEndPeriodUs);
 
    // MinPwmPerMil
    if (Decode16(&buf16, bufp, validMask, EFlMinPwmPerMil))

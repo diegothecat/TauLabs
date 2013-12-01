@@ -1,8 +1,7 @@
 <xml>
     <object name="CanEscSettings" singleinstance="true" settings="false">
         <description>CAN-ESC Settings</description>
-        <!--field name="UpdateCmd" units="" type="enum" options="None,RequestCfg,UpdateAll,UpdateThis" elements="1"/-->
-        <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn" />
+        <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn,LoadDefaults" />
 
         <field name="MotorPolePairs" units="" type="uint8" elements="1" defaultvalue="0"/>
         <field name="MotorKv" units="RPM/V" type="uint16" elements="1" defaultvalue="0"/>
@@ -11,8 +10,13 @@
  
         <field name="MaxAcceleration" units="Ticks/ms^2" type="uint16" elements="1" defaultvalue="0"/>
         <field name="MaxCycleTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
-        <field name="StartAlignTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+
+        <field name="AlignTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="AlignCurrent" units="mA" type="uint16" elements="1" defaultvalue="0"/>
+
         <field name="RampUpTime" units="ms" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="RampUpStartPeriod" units="us" type="uint16" elements="1" defaultvalue="0"/>
+        <field name="RampUpEndPeriod" units="us" type="uint16" elements="1" defaultvalue="0"/>
 
         <field name="MinPWM" units="%" type="float" elements="1" defaultvalue="0.0"/>
         <field name="MaxPWM" units="%" type="float" elements="1" defaultvalue="0.0"/>

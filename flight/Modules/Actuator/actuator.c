@@ -46,6 +46,7 @@
 #include "mixerstatus.h"
 #include "cameradesired.h"
 #include "manualcontrolcommand.h"
+
 #if defined(PIOS_INCLUDE_CAN_ESC)
 #include "canescsettings.h"
 #include "canescsettingscmd.h"
@@ -867,7 +868,7 @@ static void CanEscRequestConfig(uint8_t escAddr)
 
 static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], ActuatorSettingsData *actuatorSettings)
 {
-   bool success = false;
+   bool success = true;
    uint32_t ubuf[3] = { 0 };
    uint8_t *bufp = (uint8_t *) (ubuf + 1);
    uint8_t bldcAddrMask = 0xF; // Address all ESC's
@@ -882,14 +883,16 @@ static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], Actua
 
    for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
    {
-      if (mixers[n].type == MIXERSETTINGS_MIXER1TYPE_MOTOR && escIdx < MAX_CANESC_CNT)
+      if (mixers[n].type == MIXERSETTINGS_MIXER1TYPE_MOTOR
+          /* && actuatorSettings->ChannelType[n] == ACTUATORSETTINGS_CHANNELTYPE_PWM */
+          && escIdx < MAX_CANESC_CNT)
       {
          int16_t val = channel[n];
-         bufp[escIdx * 2] = val & 0xFF;
-         bufp[escIdx + 1 * 2] = val >> 8;
+         bufp[escIdx * 2 + 0] = val & 0xFF;
+         bufp[escIdx * 2 + 1] = val >> 8;
 
          escIdx++;
-         success &= 1;
+         success &= true;
       }
       else
       {
@@ -897,7 +900,7 @@ static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], Actua
       }
    }
 
-   // Send CAN msg
+   // Send message to CAN bus
    if (escIdx > 0)  PIOS_COM_SendBufferNonBlocking(pios_com_can_id, (uint8_t *) ubuf, sizeof(ubuf));
 
    return success;
@@ -911,49 +914,61 @@ static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
    bufp++;
 
    // ValidMask
-   bufp = UnalignedWr16(EFlFlags | EFlMotorPolePairs | EFlMotorKv | EFlMotorMaxCurrentMa | EflMotorMaxPower
-         |  EflMaxAcceleration | EFlMaxCycleTimeMs | EFlStartAlignTimeMs | EFlRampUpTimeMs
-         | EFlMinPwmPerMil | EFlMaxPwmPerMil | EFlMinBatVoltageMv, bufp);
+   bufp = UnalignedWr16(CAN_CFG_VALIDFLAGS_ALLMSK, bufp);
 
    // Flags
-   *(uint8_t *) bufp = (cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
-         | (cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] ? ECfBrakeEn : 0);
+   *bufp =
+           (cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
+         | (cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] ? ECfBrakeEn : 0)
+         | (cfg->Flags[CANESCSETTINGS_FLAGS_LOADDEFAULTS] ? ECfLoadDefaults : 0);
    bufp++;
 
-   // MotorPolePairs
-   *(uint8_t *) bufp = cfg->MotorPolePairs;
-   bufp++;
+   if (! cfg->Flags[CANESCSETTINGS_FLAGS_LOADDEFAULTS])
+   {
+      // MotorPolePairs
+      *(uint8_t *) bufp = cfg->MotorPolePairs;
+      bufp++;
 
-   // MotorKv
-   bufp = UnalignedWr16(cfg->MotorKv, bufp);
+      // MotorKv
+      bufp = UnalignedWr16(cfg->MotorKv, bufp);
 
-   // MotorMaxCurrentMa
-   bufp = UnalignedWr16((uint16_t) (cfg->MotorMaxCurrent * 1000.0f + 0.5f), bufp);
+      // MotorMaxCurrentMa
+      bufp = UnalignedWr16((uint16_t) (cfg->MotorMaxCurrent * 1000.0f + 0.5f), bufp);
 
-   // MotorMaxPower
-   bufp = UnalignedWr16(cfg->MotorMaxPower, bufp);
+      // MotorMaxPower
+      bufp = UnalignedWr16(cfg->MotorMaxPower, bufp);
 
-   // MaxAcceleration
-   bufp = UnalignedWr16(cfg->MaxAcceleration, bufp);
+      // MaxAcceleration
+      bufp = UnalignedWr16(cfg->MaxAcceleration, bufp);
 
-   // MaxCycleTimeMs
-   *(uint8_t *) bufp = (uint8_t) cfg->MaxCycleTime;
-   bufp++;
+      // MaxCycleTimeMs
+      *(uint8_t *) bufp = (uint8_t) cfg->MaxCycleTime;
+      bufp++;
 
-   // StartAlignTimeMs
-   bufp = UnalignedWr16(cfg->StartAlignTime, bufp);
+      // AlignTimeMs
+      bufp = UnalignedWr16(cfg->AlignTime, bufp);
 
-   // RampUpTimeMs
-   bufp = UnalignedWr16(cfg->RampUpTime, bufp);
+      // AlignCurrentMa
+      bufp = UnalignedWr16(cfg->AlignCurrent, bufp);
 
-   // MinPwmPerMil
-   bufp = UnalignedWr16((uint16_t) (cfg->MinPWM * 10.0f + 0.5f), bufp);
+      // RampUpTimeMs
+      bufp = UnalignedWr16(cfg->RampUpTime, bufp);
 
-   // MaxPwmPerMil
-   bufp = UnalignedWr16((uint16_t) (cfg->MaxPWM * 10.0f + 0.5f), bufp);
+      // RampUpStartPeriodUs
+      bufp = UnalignedWr16(cfg->RampUpStartPeriod, bufp);
 
-   // MinBatVoltageMv
-   bufp = UnalignedWr16((uint16_t) (cfg->MinBatVoltage * 1000.0f + 0.5f), bufp);
+      // RampUpEndPeriodUs
+      bufp = UnalignedWr16(cfg->RampUpEndPeriod, bufp);
+
+      // MinPwmPerMil
+      bufp = UnalignedWr16((uint16_t) (cfg->MinPWM * 10.0f + 0.5f), bufp);
+
+      // MaxPwmPerMil
+      bufp = UnalignedWr16((uint16_t) (cfg->MaxPWM * 10.0f + 0.5f), bufp);
+
+      // MinBatVoltageMv
+      bufp = UnalignedWr16((uint16_t) (cfg->MinBatVoltage * 1000.0f + 0.5f), bufp);
+   }
 
    // Store payload length in first byte of the payload
    *buf = bufp - buf;
@@ -1012,11 +1027,19 @@ void PrintEscSettings(CanEscSettingsData *cfg)
 
    PIOS_COM_SendFormattedString(pios_com_debug_id,
            " MaxCycleTimeMs         %d\r\n"
-           " StartAlignTimeMs       %d\r\n"
-           " RampUpTimeMs           %d\r\n",
+           " AlignTimeMs            %d\r\n"
+           " AlignCurrentMa         %d\r\n",
            cfg->MaxCycleTime,
-           cfg->StartAlignTime,
-           cfg->RampUpTime);
+           cfg->AlignTime,
+           cfg->AlignCurrent);
+
+   PIOS_COM_SendFormattedString(pios_com_debug_id,
+           " RampUpTimeMs           %d\r\n"
+           " RampUpStartPeriodUs    %d\r\n"
+           " RampUpEndPeriodUs      %d\r\n",
+           cfg->RampUpTime,
+           cfg->RampUpStartPeriod,
+           cfg->RampUpEndPeriod);
 
    PIOS_COM_SendFormattedString(pios_com_debug_id,
            " MinPwmPerMil           %d\r\n"

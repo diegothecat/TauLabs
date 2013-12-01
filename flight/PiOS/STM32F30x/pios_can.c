@@ -36,8 +36,9 @@
 #include "pios_can_priv.h"
 
 #if defined(PIOS_INCLUDE_CAN_ESC)
-#include <candefs.h>
-#define MY_ADDRESS 0xA
+#  include <candefs.h>
+#  define MY_ADDRESS 0xA
+#  define DEBUG_PRINT_MSG
 #endif
 
 /* Provide a COM driver */
@@ -218,8 +219,8 @@ static void PIOS_CAN_RegisterTxCallback(uintptr_t can_id, pios_com_callback tx_o
 }
 
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_t buflen)
+#if defined(PIOS_INCLUDE_CAN_ESC) && defined(DEBUG_PRINT_MSG)
+static void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_t buflen)
 {
    if (buflen <= 0) return;
 
@@ -257,7 +258,9 @@ void CAN1_RX1_IRQHandler(void)
 	buf[0] = RxMessage.ExtId;
 	memcpy((uint8_t *) (buf + 1), RxMessage.Data, RxMessage.DLC);
 
-	// PrinCanMsg("RX", RxMessage.ExtId, RxMessage.Data, RxMessage.DLC);
+#  if defined(DEBUG_PRINT_MSG) && 0
+	PrinCanMsg("RX", RxMessage.ExtId, RxMessage.Data, RxMessage.DLC);
+#  endif
 
    if (can_dev->rx_in_cb) {
       (void) (can_dev->rx_in_cb)(can_dev->rx_in_context, (uint8_t *) buf, RxMessage.DLC + sizeof(uint32_t), NULL, &rx_need_yield);
@@ -299,7 +302,10 @@ void USB_HP_CAN1_TX_IRQHandler(void)
       msg.RTR = CAN_RTR_DATA;
       msg.DLC = msgLen;
 
-      // PrinCanMsg("TX", msg.ExtId, msg.Data, msg.DLC);
+#  if defined(DEBUG_PRINT_MSG) && 0
+      if (msg.ExtId != 0x10230f1a)  PrinCanMsg("TX", msg.ExtId, msg.Data, msg.DLC);
+#  endif
+
 #else
 		msg.StdId = CAN_COM_ID;
 		msg.ExtId = 0;
