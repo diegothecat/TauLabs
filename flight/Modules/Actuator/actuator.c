@@ -114,7 +114,8 @@ static void CanEscSettingsUpdatedCb(UAVObjEvent * ev);
 static void CanEscRequestConfig(uint8_t escAddr);
 static void CanEscProcessSettingsCmd();
 static void CanEscProcessSettings();
-static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], ActuatorSettingsData *actuatorSettings);
+static bool CanEscSendDesiredSpeedMsg(int16_t channel[], const Mixer_t mixers[],
+      const ActuatorSettingsData *actuatorSettings, bool motorsArmed);
 static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf);
 static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
 #endif
@@ -335,6 +336,9 @@ static void actuatorTask(void* parameters)
 
 		float * status = (float *)&mixerStatus; //access status objects as an array of floats
 
+#if defined(PIOS_INCLUDE_CAN_ESC)
+		bool motorsArmed = true;
+#endif
 		for(int ct=0; ct < MAX_MIX_ACTUATORS; ct++)
 		{
 			if(mixers[ct].type == MIXERSETTINGS_MIXER1TYPE_DISABLED) {
@@ -361,6 +365,9 @@ static void actuatorTask(void* parameters)
 					filterAccumulator[ct] = 0;
 					lastResult[ct] = 0;
 					status[ct] = -1;  //force min throttle
+#if defined(PIOS_INCLUDE_CAN_ESC)
+					motorsArmed = false;
+#endif
 				}
 				// If armed meant to keep spinning,
 				else if ((spinWhileArmed && !positiveThrottle) ||
@@ -430,7 +437,7 @@ static void actuatorTask(void* parameters)
 		// Update servo outputs
 		bool success = true;
 #if defined(PIOS_INCLUDE_CAN_ESC)
-		success = CanEscSendDesiredSpeedMsg(command.Channel, mixers, &actuatorSettings);
+		success = CanEscSendDesiredSpeedMsg(command.Channel, mixers, &actuatorSettings, motorsArmed);
 #else
 		for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
 		{
@@ -608,10 +615,14 @@ static void setFailsafe(const ActuatorSettingsData * actuatorSettings, const Mix
 	AlarmsSet(SYSTEMALARMS_ALARM_ACTUATOR, SYSTEMALARMS_ALARM_CRITICAL);
 
 	// Update servo outputs
-	for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
-	{
-		set_channel(n, Channel[n], actuatorSettings);
-	}
+#if defined(PIOS_INCLUDE_CAN_ESC)
+   CanEscSendDesiredSpeedMsg(Channel, mixers, actuatorSettings, false);
+#else
+   for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
+   {
+      set_channel(n, Channel[n], actuatorSettings);
+   }
+#endif // PIOS_INCLUDE_CAN_ESC
 
 	// Update output object's parts that we changed
 	ActuatorCommandChannelSet(Channel);
@@ -866,7 +877,11 @@ static void CanEscRequestConfig(uint8_t escAddr)
    PIOS_COM_SendBuffer(pios_com_can_id, buf, sizeof(buf));
 }
 
-static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], ActuatorSettingsData *actuatorSettings)
+static bool CanEscSendDesiredSpeedMsg(
+      int16_t channel[],
+      const Mixer_t mixers[],
+      const ActuatorSettingsData *actuatorSettings,
+      bool motorsArmed)
 {
    bool success = true;
    uint32_t ubuf[3] = { 0 };
@@ -887,7 +902,7 @@ static bool CanEscSendDesiredSpeedMsg(int16_t channel[], Mixer_t mixers[], Actua
           /* && actuatorSettings->ChannelType[n] == ACTUATORSETTINGS_CHANNELTYPE_PWM */
           && escIdx < MAX_CANESC_CNT)
       {
-         int16_t val = channel[n];
+         int16_t val = motorsArmed ? channel[n] : 0;
          bufp[escIdx * 2 + 0] = val & 0xFF;
          bufp[escIdx * 2 + 1] = val >> 8;
 

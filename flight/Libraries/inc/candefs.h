@@ -204,6 +204,7 @@
 #define CAN_BLDC_CMD_SPEED 0x20 // Speed control (FCTRL -> BLDC)
 #define CAN_BLDC_CMD_CFG 0x30 // Send Configuration (BLDC -> FCTRL, FCTRL -> BLDC)
 #define CAN_BLDC_CMD_CFGREQ 0x40 // Request Configuration (FCTRL -> BLDC)
+#define CAN_BLDC_CMD_BOOTLDR 0x50 // Jump into bootloader for firmware upgrade (FCTRL -> BLDC)
 
 // CAN_BLDC_CMD_INF
 #define CAN_BLDC_SUBCMD_INFSENSOR 0x20 // Broadcast sensor data
