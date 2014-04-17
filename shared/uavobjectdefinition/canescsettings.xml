@@ -3,6 +3,15 @@
         <description>CAN-ESC Settings</description>
         <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn,LoadDefaults" />
 
+        <!-- 2014-04-21 12:08:57 -> 14, 4, 21, 12, 8, 57  -->
+        <field name="BuildDate" units="" type="uint8" elements="6" defaultvalue="0"/>
+        <!-- #3 GIT.abff8c8  -> 3, abff8c8 -->
+        <field name="BuildVersion" units="" type="uint32" elements="2" defaultvalue="0"/>
+        <!-- BLDC address -->
+        <field name="ESCAddr" units="" type="uint8" elements="1" defaultvalue="0"/>
+        <!-- Serial no of cortex CPU (96 Bit) -->
+        <field name="HwSerialNo" units="" type="uint32" elements="3" defaultvalue="0"/>
+
         <field name="MotorPolePairs" units="" type="uint8" elements="1" defaultvalue="0"/>
         <field name="MotorKv" units="RPM/V" type="uint16" elements="1" defaultvalue="0"/>
         <field name="MotorMaxCurrent" units="A" type="float" elements="1" defaultvalue="0"/>

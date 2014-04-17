@@ -929,7 +929,7 @@ static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
    bufp++;
 
    // ValidMask
-   bufp = UnalignedWr16(CAN_CFG_VALIDFLAGS_ALLMSK, bufp);
+   bufp = UnalignedWr32(CAN_CFG_VALIDFLAGS_ALLMSK, bufp);
 
    // Flags
    *bufp =

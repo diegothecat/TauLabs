@@ -545,7 +545,17 @@ static bool DesequenceCanCfgMsg(uint32_t ubuf[3], uint8_t buflen, uint8_t *escId
    return false;
 }
 
-inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint16_t valid, uint32_t mask)
+inline static uint8_t Decode32(uint32_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = UnalignedRd32(src);
+      return 4;
+   }
+   return 0;
+}
+
+inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
 {
    if (valid & mask)
    {
@@ -555,7 +565,7 @@ inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint16_t valid, uint
    return 0;
 }
 
-inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint16_t valid, uint32_t mask)
+inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
 {
    if (valid & mask)
    {
@@ -569,6 +579,7 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
 {
    uint8_t buf8;
    uint16_t buf16;
+   uint32_t buf32;
 
    memset(cfg, 0, sizeof(CanEscSettingsData));
 
@@ -578,8 +589,8 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
    bufp++;
 
    // ValidMask
-   uint16_t validMask = UnalignedRd16(bufp);
-   bufp += 2;
+   uint32_t validMask = UnalignedRd32(bufp);
+   bufp += 4;
 
    // Flags
    if (Decode8(&buf8, bufp, validMask, EFlFlags))
@@ -649,6 +660,47 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
    {
       bufp += 2;
       cfg->MinBatVoltage = buf16 / 1000.0f;
+   }
+
+   // BuildNo
+   if (Decode16(&buf16, bufp, validMask, EFlBuildNo))
+   {
+      bufp += 2;
+      cfg->BuildVersion[0] = buf16;
+   }
+
+   // BuildDate
+   for (int i = 0; i < 6; ++i)
+   {
+      if (Decode8(&buf8, bufp, validMask, EFlBuildDate))
+      {
+         bufp++;
+         cfg->BuildDate[i] = buf8;
+      }
+   }
+
+   // BuildGitHash
+   if (Decode32(&buf32, bufp, validMask, EFlBuildGitHash))
+   {
+      bufp += 4;
+      cfg->BuildVersion[1] = buf32;
+   }
+
+   // Station address
+   if (Decode8(&buf8, bufp, validMask, EFlEscAddr))
+   {
+      bufp++;
+      cfg->ESCAddr = buf8;
+   }
+
+   // SerialNo
+   for (int i = 0; i < 3; ++i)
+   {
+      if (Decode32(&buf32, bufp, validMask, EFlSerialNo))
+      {
+         bufp += 4;
+         cfg->HwSerialNo[i] = buf32;
+      }
    }
 }
 

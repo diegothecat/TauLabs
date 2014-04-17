@@ -222,7 +222,7 @@
 #define CAN_BLDC_MOTOR_ON 1
 
 // CAN_BLDC_CMD_CFG
-#define CAN_CFG_BUFLEN 64 // Size of buffer that can store the whole raw cfg msg
+#define CAN_CFG_BUFLEN 128 // Size of buffer that can store the whole raw cfg msg
 
 typedef enum
 {
@@ -252,7 +252,14 @@ typedef enum // If bit is set, corresponding variable is present
 
    EFlMinPwmPerMil = 1 << 12,
    EFlMaxPwmPerMil = 1 << 13,
-   EFlMinBatVoltageMv = 1 << 14
+   EFlMinBatVoltageMv = 1 << 14,
+
+   EFlBuildNo = 1 << 15,
+   EFlBuildDate = 1 << 16,
+   EFlBuildGitHash = 1 << 17,
+   EFlEscAddr = 1 << 18,
+   EFlSerialNo = 1 << 19,
+
 } ECanCfgValidFlag;
 
 #define CAN_CFG_VALIDFLAGS_ALLMSK ( \
@@ -261,7 +268,8 @@ typedef enum // If bit is set, corresponding variable is present
   | EflMaxAcceleration | EFlMaxCycleTimeMs \
   | EFlAlignTimeMs | EFlAlignCurrentMa \
   | EFlRampUpTimeMs | EFlRampUpStartPeriodUs | EFlRampUpEndPeriodUs \
-  | EFlMinPwmPerMil | EFlMaxPwmPerMil | EFlMinBatVoltageMv )
+  | EFlMinPwmPerMil | EFlMaxPwmPerMil | EFlMinBatVoltageMv \
+  | EFlBuildNo | EFlBuildDate | EFlBuildGitHash | EFlEscAddr | EFlSerialNo )
 
 // CAN_BLDC_CMD_INF
 #define CAN_BLDC_INFSENSORMSG_LEN 8 // 4 x 12 bit sensor + 16 bit status
