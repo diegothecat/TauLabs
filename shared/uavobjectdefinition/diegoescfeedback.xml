@@ -1,6 +1,6 @@
 <xml>
-    <object name="MotorFeedback" singleinstance="true" settings="false">
-        <description>Sensor data from brushless motor controllers.</description>
+    <object name="DiegoESCFeedback" singleinstance="true" settings="false">
+        <description>Sensor data from Diego-ESC motor controllers.</description>
         <field name="Current" units="A" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
         <field name="RPM" units="RPM" type="uint32" elementnames="ESC0,ESC1,ESC2,ESC3"/>
         <field name="BatteryVoltage" units="V" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>

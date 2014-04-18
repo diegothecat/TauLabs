@@ -741,7 +741,7 @@ void PIOS_I2C_external_er_irq_handler(void)
 struct pios_can_cfg pios_can_cfg = {
 	.regs = CAN1,
 	.init = {
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 		.CAN_Prescaler = 3,   /*!< Specifies the length of a time quantum.
                                  It ranges from 1 to 1024. */
 		.CAN_Mode = CAN_Mode_Normal,         /*!< Specifies the CAN operating mode.
@@ -793,7 +793,7 @@ struct pios_can_cfg pios_can_cfg = {
                                   This parameter can be set either to ENABLE or DISABLE. */
   		.CAN_TXFP = DISABLE,  /*!< Enable or disable the transmit FIFO priority.
                                   This parameter can be set either to ENABLE or DISABLE. */
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 	},
 	.remap = GPIO_AF_7,
 	.tx = {

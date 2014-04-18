@@ -1,5 +1,5 @@
 <xml>
-    <object name="CanEscSettings" singleinstance="true" settings="false">
+    <object name="DiegoESCConfig" singleinstance="true" settings="false">
         <description>CAN-ESC Settings</description>
         <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn,LoadDefaults" />
 

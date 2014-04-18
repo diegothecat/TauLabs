@@ -93,7 +93,7 @@
 
 /* Other Interfaces */
 //#define PIOS_INCLUDE_I2C_ESC
-#define PIOS_INCLUDE_CAN_ESC
+#define PIOS_INCLUDE_DIEGO_ESC
 
 #define CAMERASTAB_POI_MODE
 

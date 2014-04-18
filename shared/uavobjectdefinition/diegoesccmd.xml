@@ -1,5 +1,5 @@
 <xml>
-    <object name="CanEscSettingsCmd" singleinstance="true" settings="false">
+    <object name="DiegoESCCmd" singleinstance="true" settings="false">
         <description>CAN-ESC Settings control</description>
         <field name="Cmd" units="" type="enum" options="NoOp,RequestCfg,UpdateAll,UpdateThis" elements="1"/>
         <field name="EscAddr" units="" type="uint8" elements="1" defaultvalue="0"/>

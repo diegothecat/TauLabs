@@ -35,7 +35,7 @@
 
 #include "pios_can_priv.h"
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 #  include <candefs.h>
 #  define MY_ADDRESS 0xA
 #  define DEBUG_PRINT_MSG
@@ -219,7 +219,7 @@ static void PIOS_CAN_RegisterTxCallback(uintptr_t can_id, pios_com_callback tx_o
 }
 
 
-#if defined(PIOS_INCLUDE_CAN_ESC) && defined(DEBUG_PRINT_MSG)
+#if defined(PIOS_INCLUDE_DIEGO_ESC) && defined(DEBUG_PRINT_MSG)
 static void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_t buflen)
 {
    if (buflen <= 0) return;
@@ -252,7 +252,7 @@ void CAN1_RX1_IRQHandler(void)
 
 	bool rx_need_yield = false;
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 	// Send the CAN ExtId in the first 4 bytes of the buffer so that the calle can use it.
 	uint32_t buf[3];
 	buf[0] = RxMessage.ExtId;
@@ -291,7 +291,7 @@ void USB_HP_CAN1_TX_IRQHandler(void)
 		// Prepare CAN message structure
 		CanTxMsg msg;
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 		uint32_t buf[3] = { 0 };
       uint16_t msgLen = (can_dev->tx_out_cb)(can_dev->tx_out_context, (uint8_t *) buf, MAX_SEND_LEN + sizeof(uint32_t), NULL, &tx_need_yield);
 		if (msgLen >= 4) msgLen -= sizeof(uint32_t); // Strip ExtId (passed in first 4 bytes by caller)
@@ -312,7 +312,7 @@ void USB_HP_CAN1_TX_IRQHandler(void)
 		msg.IDE = CAN_ID_STD;
 		msg.RTR = CAN_RTR_DATA;
 		msg.DLC = (can_dev->tx_out_cb)(can_dev->tx_out_context, msg.Data, MAX_SEND_LEN, NULL, &tx_need_yield);
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 		// Send message and get mailbox number
 		if (msg.DLC > 0) {

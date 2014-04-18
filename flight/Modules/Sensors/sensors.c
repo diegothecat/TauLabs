@@ -47,13 +47,13 @@
 #include "magbias.h"
 #include "coordinate_conversions.h"
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-#include "motorfeedback.h"
-#include "canescsettings.h"
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+#include "diegoescfeedback.h"
+#include "diegoescconfig.h"
 #endif
 
 // Shared headers
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 #include <candefs.h>
 #include <utils.h>
 #endif
@@ -84,8 +84,8 @@ static void mag_calibration_fix_length(MagnetometerData *mag);
 
 static void updateTemperatureComp(float temperature, float *temp_bias);
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-static void ProcessCanEscMsgs();
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+static void ProcessDiegoESCMsgs();
 #endif
 
 // Private variables
@@ -93,9 +93,9 @@ static xTaskHandle sensorsTaskHandle;
 static INSSettingsData insSettings;
 static AccelsData accelsData;
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-static MotorFeedbackData escData;
-static CanEscSettingsData escSettingsData;
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+static DiegoESCFeedbackData escData;
+static DiegoESCConfigData escSettingsData;
 
 typedef struct
 {
@@ -152,8 +152,8 @@ static int32_t SensorsInitialize(void)
 	SensorSettingsInitialize();
 	INSSettingsInitialize();
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-	MotorFeedbackInitialize();
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+	DiegoESCFeedbackInitialize();
 #endif
 
 	rotate = 0;
@@ -244,8 +244,8 @@ static void SensorsTask(void *parameters)
 			update_baro(&baro);
 		}
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-		ProcessCanEscMsgs();
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+		ProcessDiegoESCMsgs();
 #endif
 
 		if (good_runs > REQUIRED_GOOD_CYCLES)
@@ -434,7 +434,7 @@ static void updateTemperatureComp(float temperature, float *temp_bias)
 	}
 }
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 
 // Round to nearest value, keeping 2 decimal places.
 // E.g. 10.1299 -> 10.13
@@ -443,7 +443,7 @@ static float rnd(float val)
    return floorf(val * 100 + 0.5f) / 100;
 }
 
-static void UpdateCanEscFeedback(uint32_t ubuf[3])
+static void UpdateDiegoESCFeedback(uint32_t ubuf[3])
 {
    uint32_t canExtId = ubuf[0];
    uint64_t payload = (uint64_t) ubuf[2] << 32 | ubuf[1];
@@ -495,12 +495,12 @@ static void UpdateCanEscFeedback(uint32_t ubuf[3])
 
    if (errorFields == NULL) return;
 
-   for (int i = 0; i < MOTORFEEDBACK_ERRORESC0_NUMELEM; ++i)
+   for (int i = 0; i < DIEGOESCFEEDBACK_ERRORESC0_NUMELEM; ++i)
    {
       errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
    }
 
-   MotorFeedbackSet(&escData);
+   DiegoESCFeedbackSet(&escData);
 }
 
 static bool DesequenceCanCfgMsg(uint32_t ubuf[3], uint8_t buflen, uint8_t *escIdx)
@@ -575,13 +575,13 @@ inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32
    return 0;
 }
 
-static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
+static void DecodeCanSettingsMsg(uint8_t *buf, DiegoESCConfigData *cfg)
 {
    uint8_t buf8;
    uint16_t buf16;
    uint32_t buf32;
 
-   memset(cfg, 0, sizeof(CanEscSettingsData));
+   memset(cfg, 0, sizeof(DiegoESCConfigData));
 
    uint8_t *bufp = buf;
 
@@ -596,8 +596,8 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
    if (Decode8(&buf8, bufp, validMask, EFlFlags))
    {
       bufp++;
-      if (buf8 & ECfUartEn) cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] = 1;
-      if (buf8 & ECfBrakeEn) cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] = 1;
+      if (buf8 & ECfUartEn) cfg->Flags[DIEGOESCCONFIG_FLAGS_DEBUGPRINTEN] = 1;
+      if (buf8 & ECfBrakeEn) cfg->Flags[DIEGOESCCONFIG_FLAGS_BRAKEEN] = 1;
    }
 
    // MotorPolePairs
@@ -704,26 +704,26 @@ static void DecodeCanSettingsMsg(uint8_t *buf, CanEscSettingsData *cfg)
    }
 }
 
-void PrintEscSettings(CanEscSettingsData *cfg);
+void PrintEscSettings(DiegoESCConfigData *cfg);
 
-static void UpdateCanEscSettings(uint32_t ubuf[3], uint8_t buflen)
+static void UpdateDiegoESCConfig(uint32_t ubuf[3], uint8_t buflen)
 {
    uint8_t updatedEscIdx;
    if (DesequenceCanCfgMsg(ubuf, buflen, &updatedEscIdx))
    {
       // Received a complete configuration msg
 
-      CanEscSettingsSetDefaults(CanEscSettingsHandle(), 0);
-      CanEscSettingsGet(&escSettingsData);
+      DiegoESCConfigSetDefaults(DiegoESCConfigHandle(), 0);
+      DiegoESCConfigGet(&escSettingsData);
       DecodeCanSettingsMsg(gCfgMsgState[updatedEscIdx].Buf, &escSettingsData);
 
       // PrintEscSettings(&escSettingsData);
 
-      CanEscSettingsSet(&escSettingsData);
+      DiegoESCConfigSet(&escSettingsData);
    }
 }
 
-static void ProcessCanEscMsgs()
+static void ProcessDiegoESCMsgs()
 {
    uint32_t ubuf[3];
    uint8_t *bufp = (uint8_t *) ubuf;
@@ -740,19 +740,19 @@ static void ProcessCanEscMsgs()
       {
          case CAN_BLDC_CMD_CFG:
          {
-            UpdateCanEscSettings(ubuf, bytesRcvd);
+            UpdateDiegoESCConfig(ubuf, bytesRcvd);
             break;
          }
          case CAN_BLDC_CMD_INF:
          {
             if (bytesRcvd != 12) break;
-            UpdateCanEscFeedback(ubuf);
+            UpdateDiegoESCFeedback(ubuf);
             break;
          }
       }
    }
 }
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 /**
  * Perform an update of the @ref MagBias based on

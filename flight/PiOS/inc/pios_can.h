@@ -31,7 +31,7 @@
 #if !defined(PIOS_CAN_H)
 #define PIOS_CAN_H
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 
 #define MAX_CANESC_CNT 4
 #define MY_CAN_ADDRESS 0xA

@@ -47,9 +47,9 @@
 #include "cameradesired.h"
 #include "manualcontrolcommand.h"
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-#include "canescsettings.h"
-#include "canescsettingscmd.h"
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+#include "diegoescconfig.h"
+#include "diegoesccmd.h"
 #include <candefs.h>
 #include <utils.h>
 #endif
@@ -67,7 +67,7 @@
 #define FAILSAFE_TIMEOUT_MS 100
 #define MAX_MIX_ACTUATORS ACTUATORCOMMAND_CHANNEL_NUMELEM
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 #define MIN(x,y) ((x) < (y) ? (x) : (y))
 #endif
 
@@ -91,10 +91,10 @@ static volatile bool actuator_settings_updated;
 // used to inform the actuator thread that mixer settings are changed
 static volatile bool mixer_settings_updated;
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-static volatile bool canesc_settingscmd_updated;
-static volatile bool canesc_settings_updated;
-static CanEscSettingsCmdData canEscUpdateCmd;
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+static volatile bool diegoesc_settingscmd_updated;
+static volatile bool diegoesc_settings_updated;
+static DiegoESCCmdData diegoEscUpdateCmd;
 #endif
 
 // Private functions
@@ -106,18 +106,18 @@ static bool set_channel(uint8_t mixer_channel, uint16_t value, const ActuatorSet
 static void actuator_update_rate_if_changed(const ActuatorSettingsData * actuatorSettings, bool force_update);
 static void MixerSettingsUpdatedCb(UAVObjEvent * ev);
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-static void CanEscInit();
-static void CanEscStart();
-static void CanEscSettingsCmdUpdatedCb(UAVObjEvent * ev);
-static void CanEscSettingsUpdatedCb(UAVObjEvent * ev);
-static void CanEscRequestConfig(uint8_t escAddr);
-static void CanEscProcessSettingsCmd();
-static void CanEscProcessSettings();
-static bool CanEscSendDesiredSpeedMsg(int16_t channel[], const Mixer_t mixers[],
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+static void DiegoESCInit();
+static void DiegoESCStart();
+static void DiegoESCCmdUpdatedCb(UAVObjEvent * ev);
+static void DiegoESCConfigUpdatedCb(UAVObjEvent * ev);
+static void DiegoESCRequestConfig(uint8_t escAddr);
+static void DiegoESCProcessSettingsCmd();
+static void DiegoESCProcessSettings();
+static bool DiegoESCSendDesiredSpeedMsg(int16_t channel[], const Mixer_t mixers[],
       const ActuatorSettingsData *actuatorSettings, bool motorsArmed);
-static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf);
-static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
+static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf);
+static void DiegoESCSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
 #endif
 
 static void ActuatorSettingsUpdatedCb(UAVObjEvent * ev);
@@ -136,8 +136,8 @@ int32_t ActuatorStart()
 	TaskMonitorAdd(TASKINFO_RUNNING_ACTUATOR, taskHandle);
 	PIOS_WDG_RegisterFlag(PIOS_WDG_ACTUATOR);
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-	CanEscStart();
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+	DiegoESCStart();
 #endif
 
 	return 0;
@@ -157,8 +157,8 @@ int32_t ActuatorInitialize()
 	MixerSettingsInitialize();
 	MixerSettingsConnectCallback(MixerSettingsUpdatedCb);
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-	CanEscInit();
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+	DiegoESCInit();
 #endif
 
 	// Listen for ActuatorDesired updates (Primary input to this module)
@@ -213,9 +213,9 @@ static void actuatorTask(void* parameters)
 	mixer_settings_updated = false;
 	MixerSettingsGet(&mixerSettings);
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-	canesc_settings_updated = false;
-   canesc_settingscmd_updated = false;
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+	diegoesc_settings_updated = false;
+   diegoesc_settingscmd_updated = false;
 #endif
 
 	/* Force an initial configuration of the actuator update rates */
@@ -244,16 +244,16 @@ static void actuatorTask(void* parameters)
 			MixerSettingsGet (&mixerSettings);
 		}
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
-      if (canesc_settingscmd_updated)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+      if (diegoesc_settingscmd_updated)
       {
-         canesc_settingscmd_updated = false;
-         CanEscProcessSettingsCmd();
+         diegoesc_settingscmd_updated = false;
+         DiegoESCProcessSettingsCmd();
       }
-      if (canesc_settings_updated)
+      if (diegoesc_settings_updated)
       {
-         canesc_settings_updated = false;
-         CanEscProcessSettings();
+         diegoesc_settings_updated = false;
+         DiegoESCProcessSettings();
       }
 #endif
 
@@ -336,7 +336,7 @@ static void actuatorTask(void* parameters)
 
 		float * status = (float *)&mixerStatus; //access status objects as an array of floats
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 		bool motorsArmed = true;
 #endif
 		for(int ct=0; ct < MAX_MIX_ACTUATORS; ct++)
@@ -365,7 +365,7 @@ static void actuatorTask(void* parameters)
 					filterAccumulator[ct] = 0;
 					lastResult[ct] = 0;
 					status[ct] = -1;  //force min throttle
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 					motorsArmed = false;
 #endif
 				}
@@ -436,14 +436,14 @@ static void actuatorTask(void* parameters)
 
 		// Update servo outputs
 		bool success = true;
-#if defined(PIOS_INCLUDE_CAN_ESC)
-		success = CanEscSendDesiredSpeedMsg(command.Channel, mixers, &actuatorSettings, motorsArmed);
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+		success = DiegoESCSendDesiredSpeedMsg(command.Channel, mixers, &actuatorSettings, motorsArmed);
 #else
 		for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
 		{
 			success &= set_channel(n, command.Channel[n], &actuatorSettings);
 		}
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 		if(!success) {
 			command.NumFailedUpdates++;
@@ -615,14 +615,14 @@ static void setFailsafe(const ActuatorSettingsData * actuatorSettings, const Mix
 	AlarmsSet(SYSTEMALARMS_ALARM_ACTUATOR, SYSTEMALARMS_ALARM_CRITICAL);
 
 	// Update servo outputs
-#if defined(PIOS_INCLUDE_CAN_ESC)
-   CanEscSendDesiredSpeedMsg(Channel, mixers, actuatorSettings, false);
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+   DiegoESCSendDesiredSpeedMsg(Channel, mixers, actuatorSettings, false);
 #else
    for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
    {
       set_channel(n, Channel[n], actuatorSettings);
    }
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 	// Update output object's parts that we changed
 	ActuatorCommandChannelSet(Channel);
@@ -804,62 +804,62 @@ static void MixerSettingsUpdatedCb(UAVObjEvent * ev)
  * CAN ESC
  ******************************************************************************/
 
-#if defined(PIOS_INCLUDE_CAN_ESC)
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
 
-static void CanEscInit()
+static void DiegoESCInit()
 {
-   CanEscSettingsCmdInitialize();
-   CanEscSettingsCmdConnectCallback(CanEscSettingsCmdUpdatedCb);
+   DiegoESCCmdInitialize();
+   DiegoESCCmdConnectCallback(DiegoESCCmdUpdatedCb);
 
-   CanEscSettingsInitialize();
-   CanEscSettingsConnectCallback(CanEscSettingsUpdatedCb);
+   DiegoESCConfigInitialize();
+   DiegoESCConfigConnectCallback(DiegoESCConfigUpdatedCb);
 }
 
-static void CanEscStart()
-{
-}
-
-static void CanEscSettingsCmdUpdatedCb(UAVObjEvent * ev)
-{
-   canesc_settingscmd_updated = true;
-}
-
-static void CanEscSettingsUpdatedCb(UAVObjEvent * ev)
-{
-   canesc_settings_updated = true;
-}
-
-static void CanEscProcessSettings()
+static void DiegoESCStart()
 {
 }
 
-static void CanEscProcessSettingsCmd()
+static void DiegoESCCmdUpdatedCb(UAVObjEvent * ev)
 {
-   CanEscSettingsCmdGet(&canEscUpdateCmd);
+   diegoesc_settingscmd_updated = true;
+}
 
-   canEscUpdateCmd.EscAddr &= 0xF;
+static void DiegoESCConfigUpdatedCb(UAVObjEvent * ev)
+{
+   diegoesc_settings_updated = true;
+}
 
-   // PrintEscSettings(&cfg);
+static void DiegoESCProcessSettings()
+{
+}
 
-   if (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_REQUESTCFG)
+static void DiegoESCProcessSettingsCmd()
+{
+   DiegoESCCmdGet(&diegoEscUpdateCmd);
+
+   diegoEscUpdateCmd.EscAddr &= 0xF;
+
+   // PrintDiegoESCSettings(&cfg);
+
+   if (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_REQUESTCFG)
    {
-      CanEscSettingsSetDefaults(CanEscSettingsHandle(), 0);
-      CanEscRequestConfig(canEscUpdateCmd.EscAddr);
+      DiegoESCConfigSetDefaults(DiegoESCConfigHandle(), 0);
+      DiegoESCRequestConfig(diegoEscUpdateCmd.EscAddr);
    }
-   else if (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATEALL || canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATETHIS)
+   else if (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATEALL || diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATETHIS)
    {
-      CanEscSettingsData escSettings;
-      CanEscSettingsGet(&escSettings); // User should manually update the UAV obj.
+      DiegoESCConfigData escSettings;
+      DiegoESCConfigGet(&escSettings); // User should manually update the UAV obj.
 
       uint8_t buf[CAN_CFG_BUFLEN];
-      uint16_t buflen = CanEscEncodeSettings(&escSettings, buf);
+      uint16_t buflen = DiegoESCEncodeSettings(&escSettings, buf);
 
-      CanEscSendSettings(buf, buflen,
-         (canEscUpdateCmd.Cmd == CANESCSETTINGSCMD_CMD_UPDATETHIS) ? canEscUpdateCmd.EscAddr : 0xFF);
+      DiegoESCSendSettings(buf, buflen,
+         (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATETHIS) ? diegoEscUpdateCmd.EscAddr : 0xFF);
    }
 }
 
-static void CanEscRequestConfig(uint8_t escAddr)
+static void DiegoESCRequestConfig(uint8_t escAddr)
 {
    uint8_t buf[5] = { 0 };
 
@@ -877,7 +877,7 @@ static void CanEscRequestConfig(uint8_t escAddr)
    PIOS_COM_SendBuffer(pios_com_can_id, buf, sizeof(buf));
 }
 
-static bool CanEscSendDesiredSpeedMsg(
+static bool DiegoESCSendDesiredSpeedMsg(
       int16_t channel[],
       const Mixer_t mixers[],
       const ActuatorSettingsData *actuatorSettings,
@@ -921,7 +921,7 @@ static bool CanEscSendDesiredSpeedMsg(
    return success;
 }
 
-static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
+static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf)
 {
    uint8_t *bufp = buf;
 
@@ -933,12 +933,12 @@ static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
 
    // Flags
    *bufp =
-           (cfg->Flags[CANESCSETTINGS_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
-         | (cfg->Flags[CANESCSETTINGS_FLAGS_BRAKEEN] ? ECfBrakeEn : 0)
-         | (cfg->Flags[CANESCSETTINGS_FLAGS_LOADDEFAULTS] ? ECfLoadDefaults : 0);
+           (cfg->Flags[DIEGOESCCONFIG_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
+         | (cfg->Flags[DIEGOESCCONFIG_FLAGS_BRAKEEN] ? ECfBrakeEn : 0)
+         | (cfg->Flags[DIEGOESCCONFIG_FLAGS_LOADDEFAULTS] ? ECfLoadDefaults : 0);
    bufp++;
 
-   if (! cfg->Flags[CANESCSETTINGS_FLAGS_LOADDEFAULTS])
+   if (! cfg->Flags[DIEGOESCCONFIG_FLAGS_LOADDEFAULTS])
    {
       // MotorPolePairs
       *(uint8_t *) bufp = cfg->MotorPolePairs;
@@ -991,7 +991,7 @@ static uint16_t CanEscEncodeSettings(CanEscSettingsData *cfg, uint8_t *buf)
    return *buf;
 }
 
-static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
+static void DiegoESCSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
 {
    uint8_t *bufp = buf;
    uint8_t msgLen;
@@ -1022,11 +1022,11 @@ static void CanEscSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
    }
 }
 
-void PrintEscSettings(CanEscSettingsData *cfg)
+void PrintDiegoESCSettings(DiegoESCConfigData *cfg)
 {
    // Send buffer is limited to 128 Byte. Print out in chunks.
    PIOS_COM_SendFormattedString(pios_com_debug_id,
-           "CAN-ESC Configuration:\r\n"
+           "Diego-ESC Configuration:\r\n"
            " MotorPolePairs         %d\r\n"
            " MotorKv                %d\r\n",
            cfg->MotorPolePairs,
@@ -1065,7 +1065,7 @@ void PrintEscSettings(CanEscSettingsData *cfg)
            (uint16_t) (cfg->MinBatVoltage * 1000.0f + 0.5f) );
 }
 
-#endif // PIOS_INCLUDE_CAN_ESC
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 /**
  * @}
