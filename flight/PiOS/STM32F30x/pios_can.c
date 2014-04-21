@@ -186,10 +186,19 @@ static void PIOS_CAN_TxStart(uintptr_t can_id, uint16_t tx_bytes_avail)
 	
    CAN_DEBUG_Assert(PIOS_CAN_validate(can_dev));
 
- 	CAN_ITConfig(can_dev->cfg->regs, CAN_IT_TME, ENABLE);
-	
- 	// Try to start the transfer. If any mbox is not empty, the ISR is called if mbox goes empty.
+	if (can_dev->cfg->regs->IER & CAN_IER_TMEIE)  return; // TX is still in progress.
+
+   // TX interrupt is disabled (means previous job is done)
+
+   CAN_ClearITPendingBit(can_dev->cfg->regs, CAN_IT_TME);
+	CAN_ITConfig(can_dev->cfg->regs, CAN_IT_TME, ENABLE);
+
+	NVIC_DisableIRQ(USB_HP_CAN1_TX_IRQn); // Protect from simultaneous accessing the FIFO from ISR.
+
+	// Try to transmit. If no mailbox is empty, the TX interrupt becomes pending if mailbox goes empty.
 	USB_HP_CAN1_TX_IRQHandler();
+
+	NVIC_EnableIRQ(USB_HP_CAN1_TX_IRQn); // Unmask TX interrupt. If TX interrupt is pending, the CPU calls the ISR.
 }
 
 static void PIOS_CAN_RegisterRxCallback(uintptr_t can_id, pios_com_callback rx_in_cb, uintptr_t context)
