@@ -70,13 +70,11 @@
 #endif
 
 // Private types
-
 //this structure is equivalent to the UAVObjects for one mixer.
 typedef struct {
    uint8_t type;
    int8_t matrix[5];
 } __attribute__((packed)) Mixer_t;
-
 
 // Private variables
 static xQueueHandle queue;
@@ -390,6 +388,7 @@ static void actuatorTask(void* parameters)
 		MixerStatusSet(&mixerStatus);
 #endif
 
+
 		// Update servo outputs
 		bool success = true;
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
@@ -409,6 +408,8 @@ static void actuatorTask(void* parameters)
 
 	}
 }
+
+
 
 /**
  *Process mixing for one actuator

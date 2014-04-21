@@ -49,10 +49,7 @@
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 #include "diegoescfeedback.h"
-#endif
-
 // Shared headers
-#if defined(PIOS_INCLUDE_DIEGO_ESC)
 #include <candefs.h>
 #include <utils.h>
 #endif
@@ -198,6 +195,7 @@ static void SensorsTask(void *parameters)
 
 	UAVObjEvent ev;
 	settingsUpdatedCb(&ev);
+
 
 	// Main task loop
 	lastSysTime = xTaskGetTickCount();
@@ -438,137 +436,6 @@ static void updateTemperatureComp(float temperature, float *temp_bias)
 	}
 }
 
-#if defined(PIOS_INCLUDE_DIEGO_ESC)
-
-// Round to nearest value, keeping 2 decimal places.
-// E.g. 10.1299 -> 10.13
-static float rnd(float val)
-{
-   return floorf(val * 100 + 0.5f) / 100;
-}
-
-static void DiegoESCUpdateFeedback(const struct pios_can_msgheader *msgHdr, const uint8_t *buf)
-{
-   uint64_t payload = UnalignedRd64(buf);
-
-   //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
-
-   uint8_t blcIdx = msgHdr->CanId & 0xF;
-   if (blcIdx < 0 || blcIdx >= MAX_CANESC_CNT) return;
-
-   /*
-     PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
-     12 bit: Motor current (CentiAmpere, A / 100)
-     12 bit: Battery voltage (CentiVolt, V / 100)
-     12 bit: Motor RPM (Deci-RPM, RPM / 10)
-     12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
-     16 bit: Status word. \sa EBldcStatusWord
-    */
-
-   // Motor current
-   uint16_t tmp = (uint16_t) (payload & 0xFFF);
-   diegoESCFeedbackData.Current[blcIdx] = rnd(tmp / 100.0f);
-
-   // Battery voltage
-   tmp = (uint16_t) ((payload >> 12) & 0xFFF);
-   diegoESCFeedbackData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
-
-   // RPM
-   tmp = (uint16_t) ((payload >> 24) & 0xFFF);
-   diegoESCFeedbackData.RPM[blcIdx] = tmp * 10;
-
-   // Duty cycle
-   tmp = (uint16_t) ((payload >> 36) & 0xFFF);
-   diegoESCFeedbackData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
-
-   // P = U * I
-   diegoESCFeedbackData.PowerConsumption[blcIdx] = rnd(diegoESCFeedbackData.BatteryVoltage[blcIdx]
-                                                       * diegoESCFeedbackData.Current[blcIdx]);
-
-   // Status word
-   tmp = (uint16_t) (payload >> 48);
-
-   uint8_t *errorFields = NULL;
-   switch (blcIdx)
-   {
-      case 0: errorFields = diegoESCFeedbackData.ErrorESC0; break;
-      case 1: errorFields = diegoESCFeedbackData.ErrorESC1; break;
-      case 2: errorFields = diegoESCFeedbackData.ErrorESC2; break;
-      case 3: errorFields = diegoESCFeedbackData.ErrorESC3; break;
-   }
-
-   if (errorFields == NULL) return;
-
-   for (int i = 0; i < DIEGOESCFEEDBACK_ERRORESC0_NUMELEM; ++i)
-   {
-      errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
-   }
-
-   DiegoESCFeedbackSet(&diegoESCFeedbackData);
-}
-
-inline static uint8_t Decode32(uint32_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
-{
-   if (valid & mask)
-   {
-      *dst = UnalignedRd32(src);
-      return 4;
-   }
-   return 0;
-}
-
-inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
-{
-   if (valid & mask)
-   {
-      *dst = UnalignedRd16(src);
-      return 2;
-   }
-   return 0;
-}
-
-inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
-{
-   if (valid & mask)
-   {
-      *dst = *src;
-      return 1;
-   }
-   return 0;
-}
-
-static void DiegoESCProcessCANMsgs()
-{
-   struct pios_can_msgheader msgHdr = { 0 };
-   uint8_t buf[PIOS_CAN_MAX_LEN];
-
-   for (;;)
-   {
-      uint16_t bytesRcvd = PIOS_COM_CAN_ReceiveMsg(canChId, &msgHdr, buf, 0);
-      if (bytesRcvd <= sizeof(msgHdr)) break;
-
-      uint8_t cmd = ((msgHdr.CanId & CAN_CMD_MASK) >> CAN_CMD_SHIFT) & 0xF0;
-
-      switch (cmd)
-      {
-         /*
-         case CAN_BLDC_CMD_CFG:
-         {
-            DiegoESCUpdateConfig(&msgHdr, buf, msgHdr.DLC);
-            break;
-         }
-         */
-         case CAN_BLDC_CMD_INF:
-         {
-            if (msgHdr.DLC != 8) break;
-            DiegoESCUpdateFeedback(&msgHdr, buf);
-            break;
-         }
-      }
-   }
-}
-#endif // PIOS_INCLUDE_DIEGO_ESC
-
 /**
  * Perform an update of the @ref MagBias based on
  * Magnetometer Offset Cancellation: Theory and Implementation, 
@@ -741,6 +608,138 @@ static void settingsUpdatedCb(UAVObjEvent * objEv)
 	}
 
 }
+
+#if defined(PIOS_INCLUDE_DIEGO_ESC)
+
+// Round to nearest value, keeping 2 decimal places.
+// E.g. 10.1299 -> 10.13
+static float rnd(float val)
+{
+   return floorf(val * 100 + 0.5f) / 100;
+}
+
+static void DiegoESCUpdateFeedback(const struct pios_can_msgheader *msgHdr, const uint8_t *buf)
+{
+   uint64_t payload = UnalignedRd64(buf);
+
+   //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
+
+   uint8_t blcIdx = msgHdr->CanId & 0xF;
+   if (blcIdx < 0 || blcIdx >= MAX_CANESC_CNT) return;
+
+   /*
+     PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
+     12 bit: Motor current (CentiAmpere, A / 100)
+     12 bit: Battery voltage (CentiVolt, V / 100)
+     12 bit: Motor RPM (Deci-RPM, RPM / 10)
+     12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
+     16 bit: Status word. \sa EBldcStatusWord
+    */
+
+   // Motor current
+   uint16_t tmp = (uint16_t) (payload & 0xFFF);
+   diegoESCFeedbackData.Current[blcIdx] = rnd(tmp / 100.0f);
+
+   // Battery voltage
+   tmp = (uint16_t) ((payload >> 12) & 0xFFF);
+   diegoESCFeedbackData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
+
+   // RPM
+   tmp = (uint16_t) ((payload >> 24) & 0xFFF);
+   diegoESCFeedbackData.RPM[blcIdx] = tmp * 10;
+
+   // Duty cycle
+   tmp = (uint16_t) ((payload >> 36) & 0xFFF);
+   diegoESCFeedbackData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
+
+   // P = U * I
+   diegoESCFeedbackData.PowerConsumption[blcIdx] = rnd(diegoESCFeedbackData.BatteryVoltage[blcIdx]
+                                                       * diegoESCFeedbackData.Current[blcIdx]);
+
+   // Status word
+   tmp = (uint16_t) (payload >> 48);
+
+   uint8_t *errorFields = NULL;
+   switch (blcIdx)
+   {
+      case 0: errorFields = diegoESCFeedbackData.ErrorESC0; break;
+      case 1: errorFields = diegoESCFeedbackData.ErrorESC1; break;
+      case 2: errorFields = diegoESCFeedbackData.ErrorESC2; break;
+      case 3: errorFields = diegoESCFeedbackData.ErrorESC3; break;
+   }
+
+   if (errorFields == NULL) return;
+
+   for (int i = 0; i < DIEGOESCFEEDBACK_ERRORESC0_NUMELEM; ++i)
+   {
+      errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
+   }
+
+   DiegoESCFeedbackSet(&diegoESCFeedbackData);
+}
+
+inline static uint8_t Decode32(uint32_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = UnalignedRd32(src);
+      return 4;
+   }
+   return 0;
+}
+
+inline static uint8_t Decode16(uint16_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = UnalignedRd16(src);
+      return 2;
+   }
+   return 0;
+}
+
+inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
+{
+   if (valid & mask)
+   {
+      *dst = *src;
+      return 1;
+   }
+   return 0;
+}
+
+static void DiegoESCProcessCANMsgs()
+{
+   struct pios_can_msgheader msgHdr = { 0 };
+   uint8_t buf[PIOS_CAN_MAX_LEN];
+
+   for (;;)
+   {
+      uint16_t bytesRcvd = PIOS_COM_CAN_ReceiveMsg(canChId, &msgHdr, buf, 0);
+      if (bytesRcvd <= sizeof(msgHdr)) break;
+
+      uint8_t cmd = ((msgHdr.CanId & CAN_CMD_MASK) >> CAN_CMD_SHIFT) & 0xF0;
+
+      switch (cmd)
+      {
+         /*
+         case CAN_BLDC_CMD_CFG:
+         {
+            DiegoESCUpdateConfig(&msgHdr, buf, msgHdr.DLC);
+            break;
+         }
+         */
+         case CAN_BLDC_CMD_INF:
+         {
+            if (msgHdr.DLC != 8) break;
+            DiegoESCUpdateFeedback(&msgHdr, buf);
+            break;
+         }
+      }
+   }
+}
+#endif // PIOS_INCLUDE_DIEGO_ESC
+
 /**
   * @}
   * @}

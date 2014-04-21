@@ -34,7 +34,6 @@
 #include <candefs.h>
 #include <utils.h>
 
-//#include "diegoescfeedback.h"
 #include "diegoescconfig.h"
 
 // Private constants
@@ -142,77 +141,6 @@ static void DiegoESCTask(void *parameters)
       vTaskDelayUntil(&lastSysTime, MS2TICKS(CYCLE_PERIOD_MS));
    }
 }
-
-
-#if 0
-// Round to nearest value, keeping 2 decimal places.
-// E.g. 10.1299 -> 10.13
-static float rnd(float val)
-{
-   return floorf(val * 100 + 0.5f) / 100;
-}
-
-static void DiegoESCUpdateFeedback(const struct pios_can_msgheader *msgHdr, const uint8_t *buf)
-{
-   uint64_t payload = UnalignedRd64(buf);
-
-   //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
-
-   uint8_t blcIdx = msgHdr->CanId & 0xF;
-   if (blcIdx < 0 || blcIdx >= MAX_CANESC_CNT) return;
-
-   /*
-     PAYLOAD: Cmd 2.1 (INF.SENSOR), 8 Byte:
-     12 bit: Motor current (CentiAmpere, A / 100)
-     12 bit: Battery voltage (CentiVolt, V / 100)
-     12 bit: Motor RPM (Deci-RPM, RPM / 10)
-     12 bit: Duty cycle (scaled to 12 bit, 0..4095). 4095 -> 100%
-     16 bit: Status word. \sa EBldcStatusWord
-    */
-
-   // Motor current
-   uint16_t tmp = (uint16_t) (payload & 0xFFF);
-   diegoESCFeedbackData.Current[blcIdx] = rnd(tmp / 100.0f);
-
-   // Battery voltage
-   tmp = (uint16_t) ((payload >> 12) & 0xFFF);
-   diegoESCFeedbackData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
-
-   // RPM
-   tmp = (uint16_t) ((payload >> 24) & 0xFFF);
-   diegoESCFeedbackData.RPM[blcIdx] = tmp * 10;
-
-   // Duty cycle
-   tmp = (uint16_t) ((payload >> 36) & 0xFFF);
-   diegoESCFeedbackData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
-
-   // P = U * I
-   diegoESCFeedbackData.PowerConsumption[blcIdx] = rnd(diegoESCFeedbackData.BatteryVoltage[blcIdx]
-                                                       * diegoESCFeedbackData.Current[blcIdx]);
-
-   // Status word
-   tmp = (uint16_t) (payload >> 48);
-
-   uint8_t *errorFields = NULL;
-   switch (blcIdx)
-   {
-      case 0: errorFields = diegoESCFeedbackData.ErrorESC0; break;
-      case 1: errorFields = diegoESCFeedbackData.ErrorESC1; break;
-      case 2: errorFields = diegoESCFeedbackData.ErrorESC2; break;
-      case 3: errorFields = diegoESCFeedbackData.ErrorESC3; break;
-   }
-
-   if (errorFields == NULL) return;
-
-   for (int i = 0; i < DIEGOESCFEEDBACK_ERRORESC0_NUMELEM; ++i)
-   {
-      errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
-   }
-
-   DiegoESCFeedbackSet(&diegoESCFeedbackData);
-}
-#endif
-
 
 static void DiegoESCConfigUpdatedCb(UAVObjEvent * ev)
 {
