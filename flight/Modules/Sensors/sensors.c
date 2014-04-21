@@ -85,7 +85,7 @@ static void mag_calibration_fix_length(MagnetometerData *mag);
 static void updateTemperatureComp(float temperature, float *temp_bias);
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-static void ProcessDiegoESCMsgs();
+static void DiegoESCProcessCANMsgs();
 #endif
 
 // Private variables
@@ -94,8 +94,8 @@ static INSSettingsData insSettings;
 static AccelsData accelsData;
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-static DiegoESCFeedbackData escData;
-static DiegoESCConfigData escSettingsData;
+static DiegoESCFeedbackData diegoESCFeedbackData;
+static DiegoESCConfigData diegoESCConfigData;
 
 typedef struct
 {
@@ -107,6 +107,7 @@ typedef struct
 } CfgMsgState;
 
 static CfgMsgState gCfgMsgState[MAX_CANESC_CNT];
+static uint32_t canChId;
 #endif
 
 // These values are initialized by settings but can be updated by the attitude algorithm
@@ -154,7 +155,26 @@ static int32_t SensorsInitialize(void)
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 	DiegoESCFeedbackInitialize();
-#endif
+
+	// Create virtual channel...
+	canChId = PIOS_COM_CAN_CreateChannel(pios_com_can_id);
+
+	// ...and attach message filter.
+	struct pios_can_filter canFilter;
+   canFilter.Flags = FILTER_FLAG_EXTID;
+   canFilter.IdMask32.CanMask = (0xF << CAN_DSTUNIT_SHIFT)
+                     | (0xF0 << CAN_CMD_SHIFT);
+
+   // Message Filter for CAN_BLDC_CMD_INF
+   canFilter.IdMask32.CanId = (CAN_UNIT_FCTRL << CAN_DSTUNIT_SHIFT)
+                   | (CAN_BLDC_CMD_INF << CAN_CMD_SHIFT);
+   PIOS_COM_CAN_AddFilter(canChId, &canFilter);
+
+   // Message Filter for CAN_BLDC_CMD_CFG
+   canFilter.IdMask32.CanId = (CAN_UNIT_FCTRL << CAN_DSTUNIT_SHIFT)
+                   | (CAN_BLDC_CMD_CFG << CAN_CMD_SHIFT);
+   PIOS_COM_CAN_AddFilter(canChId, &canFilter);
+#endif // PIOS_INCLUDE_DIEGO_ESC
 
 	rotate = 0;
 
@@ -245,7 +265,7 @@ static void SensorsTask(void *parameters)
 		}
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-		ProcessDiegoESCMsgs();
+		DiegoESCProcessCANMsgs();
 #endif
 
 		if (good_runs > REQUIRED_GOOD_CYCLES)
@@ -443,14 +463,13 @@ static float rnd(float val)
    return floorf(val * 100 + 0.5f) / 100;
 }
 
-static void UpdateDiegoESCFeedback(uint32_t ubuf[3])
+static void DiegoESCUpdateFeedback(const struct pios_can_msgheader *msgHdr, const uint8_t *buf)
 {
-   uint32_t canExtId = ubuf[0];
-   uint64_t payload = (uint64_t) ubuf[2] << 32 | ubuf[1];
+   uint64_t payload = UnalignedRd64(buf);
 
    //DEBUG_PRINTF(0, "CAN rx %d 0x%x\r\n", bytesRcvd, canExtId);
 
-   uint8_t blcIdx = canExtId & 0xF;
+   uint8_t blcIdx = msgHdr->CanId & 0xF;
    if (blcIdx < 0 || blcIdx >= MAX_CANESC_CNT) return;
 
    /*
@@ -464,22 +483,23 @@ static void UpdateDiegoESCFeedback(uint32_t ubuf[3])
 
    // Motor current
    uint16_t tmp = (uint16_t) (payload & 0xFFF);
-   escData.Current[blcIdx] = rnd(tmp / 100.0f);
+   diegoESCFeedbackData.Current[blcIdx] = rnd(tmp / 100.0f);
 
    // Battery voltage
    tmp = (uint16_t) ((payload >> 12) & 0xFFF);
-   escData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
+   diegoESCFeedbackData.BatteryVoltage[blcIdx] = rnd(tmp / 100.0f);
 
    // RPM
    tmp = (uint16_t) ((payload >> 24) & 0xFFF);
-   escData.RPM[blcIdx] = tmp * 10;
+   diegoESCFeedbackData.RPM[blcIdx] = tmp * 10;
 
    // Duty cycle
    tmp = (uint16_t) ((payload >> 36) & 0xFFF);
-   escData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
+   diegoESCFeedbackData.PWMDuty[blcIdx] = rnd(tmp * 100.0f / 0xFFF);
 
    // P = U * I
-   escData.PowerConsumption[blcIdx] = rnd(escData.BatteryVoltage[blcIdx] * escData.Current[blcIdx]);
+   diegoESCFeedbackData.PowerConsumption[blcIdx] = rnd(diegoESCFeedbackData.BatteryVoltage[blcIdx]
+                                                       * diegoESCFeedbackData.Current[blcIdx]);
 
    // Status word
    tmp = (uint16_t) (payload >> 48);
@@ -487,10 +507,10 @@ static void UpdateDiegoESCFeedback(uint32_t ubuf[3])
    uint8_t *errorFields = NULL;
    switch (blcIdx)
    {
-      case 0: errorFields = escData.ErrorESC0; break;
-      case 1: errorFields = escData.ErrorESC1; break;
-      case 2: errorFields = escData.ErrorESC2; break;
-      case 3: errorFields = escData.ErrorESC3; break;
+      case 0: errorFields = diegoESCFeedbackData.ErrorESC0; break;
+      case 1: errorFields = diegoESCFeedbackData.ErrorESC1; break;
+      case 2: errorFields = diegoESCFeedbackData.ErrorESC2; break;
+      case 3: errorFields = diegoESCFeedbackData.ErrorESC3; break;
    }
 
    if (errorFields == NULL) return;
@@ -500,17 +520,16 @@ static void UpdateDiegoESCFeedback(uint32_t ubuf[3])
       errorFields[i] = (tmp & (1 << i)) ? 1 : 0;
    }
 
-   DiegoESCFeedbackSet(&escData);
+   DiegoESCFeedbackSet(&diegoESCFeedbackData);
 }
 
-static bool DesequenceCanCfgMsg(uint32_t ubuf[3], uint8_t buflen, uint8_t *escIdx)
+static bool DiegoESCDesequenceCANConfigMsg(const struct pios_can_msgheader *msgHdr,
+      const uint8_t *buf, uint8_t buflen, uint8_t *escIdx)
 {
-   uint32_t canExtId = ubuf[0];
-   uint8_t seqNo = (canExtId >> CAN_CMD_SHIFT) & 0xF;
-   uint8_t *bufp = (uint8_t *) (ubuf + 1);
-   buflen -= sizeof(uint32_t); // Strip extid
-   *escIdx = canExtId & 0xF;
+   uint8_t seqNo = (msgHdr->CanId >> CAN_CMD_SHIFT) & 0xF;
+   const uint8_t *bufp = buf;
 
+   *escIdx = msgHdr->CanId & 0xF;
    if (*escIdx >= MAX_CANESC_CNT) return false;
 
    CfgMsgState *msgState = gCfgMsgState + *escIdx;
@@ -537,12 +556,12 @@ static bool DesequenceCanCfgMsg(uint32_t ubuf[3], uint8_t buflen, uint8_t *escId
    msgState->BufPtr += buflen;
    msgState->LastCfgSeqNo = seqNo;
 
-   if (msgState->BytesRcvd == msgState->PayloadLen)
+   if (msgState->BytesRcvd != msgState->PayloadLen)
    {
-      return true;
+      return false;
    }
 
-   return false;
+   return true;
 }
 
 inline static uint8_t Decode32(uint32_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
@@ -575,14 +594,11 @@ inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32
    return 0;
 }
 
-static void DecodeCanSettingsMsg(uint8_t *buf, DiegoESCConfigData *cfg)
+static void DiegoESCDecodeConfig(uint8_t *buf, DiegoESCConfigData *cfg)
 {
    uint8_t buf8;
    uint16_t buf16;
    uint32_t buf32;
-
-   memset(cfg, 0, sizeof(DiegoESCConfigData));
-
    uint8_t *bufp = buf;
 
    // Skip payload length field (1 Byte)
@@ -704,49 +720,47 @@ static void DecodeCanSettingsMsg(uint8_t *buf, DiegoESCConfigData *cfg)
    }
 }
 
-void PrintEscSettings(DiegoESCConfigData *cfg);
+void DiegoESCPrintConfig(DiegoESCConfigData *cfg);
 
-static void UpdateDiegoESCConfig(uint32_t ubuf[3], uint8_t buflen)
+static void DiegoESCUpdateConfig(const struct pios_can_msgheader *msgHdr, const uint8_t *buf, uint8_t buflen)
 {
    uint8_t updatedEscIdx;
-   if (DesequenceCanCfgMsg(ubuf, buflen, &updatedEscIdx))
+   if (DiegoESCDesequenceCANConfigMsg(msgHdr, buf, buflen, &updatedEscIdx))
    {
       // Received a complete configuration msg
 
-      DiegoESCConfigSetDefaults(DiegoESCConfigHandle(), 0);
-      DiegoESCConfigGet(&escSettingsData);
-      DecodeCanSettingsMsg(gCfgMsgState[updatedEscIdx].Buf, &escSettingsData);
+      DiegoESCConfigGet(&diegoESCConfigData);
+      DiegoESCDecodeConfig(gCfgMsgState[updatedEscIdx].Buf, &diegoESCConfigData);
 
-      // PrintEscSettings(&escSettingsData);
+      // PrintEscSettings(&diegoESCConfigData);
 
-      DiegoESCConfigSet(&escSettingsData);
+      DiegoESCConfigSet(&diegoESCConfigData);
    }
 }
 
-static void ProcessDiegoESCMsgs()
+static void DiegoESCProcessCANMsgs()
 {
-   uint32_t ubuf[3];
-   uint8_t *bufp = (uint8_t *) ubuf;
+   struct pios_can_msgheader msgHdr = { 0 };
+   uint8_t buf[PIOS_CAN_MAX_LEN];
 
    for (;;)
    {
-      uint16_t bytesRcvd = PIOS_COM_ReceiveBuffer(pios_com_can_id, bufp, sizeof(ubuf), 0);
-      if (bytesRcvd <= 4) break;
+      uint16_t bytesRcvd = PIOS_COM_CAN_ReceiveMsg(canChId, &msgHdr, buf, 0);
+      if (bytesRcvd <= sizeof(msgHdr)) break;
 
-      uint32_t canExtId = ubuf[0];
-      uint8_t cmd = ((canExtId & CAN_CMD_MASK) >> CAN_CMD_SHIFT) & 0xF0;
+      uint8_t cmd = ((msgHdr.CanId & CAN_CMD_MASK) >> CAN_CMD_SHIFT) & 0xF0;
 
       switch (cmd)
       {
          case CAN_BLDC_CMD_CFG:
          {
-            UpdateDiegoESCConfig(ubuf, bytesRcvd);
+            DiegoESCUpdateConfig(&msgHdr, buf, msgHdr.DLC);
             break;
          }
          case CAN_BLDC_CMD_INF:
          {
-            if (bytesRcvd != 12) break;
-            UpdateDiegoESCFeedback(ubuf);
+            if (msgHdr.DLC != 8) break;
+            DiegoESCUpdateFeedback(&msgHdr, buf);
             break;
          }
       }

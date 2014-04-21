@@ -148,7 +148,7 @@ SRC += $(PIOSCOMMON)/pios_ms5611.c
 SRC += $(PIOSCOMMON)/pios_ms5611_spi.c
 SRC += $(PIOSCOMMON)/pios_heap.c
 SRC += $(PIOSCOMMON)/pios_semaphore.c
-
+SRC += $(PIOSCOMMON)/pios_com_can.c
 
 include ./UAVObjects.inc
 SRC += $(UAVOBJSRC)

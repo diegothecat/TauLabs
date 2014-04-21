@@ -164,6 +164,61 @@ void PIOS_DEBUG_Panic(const char *msg)
 	while (1) ;
 }
 
+#ifdef PIOS_COM_DEBUG
+
+static void sendchar(unsigned char c)
+{
+   /* Wait until the transmitter is ready */
+   while (! (USART1->ISR & USART_ISR_TXE));
+
+   /* Transmit the character using USART1 */
+   USART1->TDR = c;
+}
+
+void sout(char *s)
+{
+   while (*s)
+   {
+      sendchar(*s);
+      s++;
+   }
+}
+
+void dbg_write_hex32(unsigned long val)
+{
+   static const char hextab[] = {
+         '0', '1', '2', '3', '4', '5', '6', '7',
+         '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+   };
+
+   for (int shift = 28; shift >= 0; shift -= 4)
+      sendchar(hextab[(val >> shift) & 0xf]);
+}
+#endif
+
+/**
+ * Report a serious error and halt
+ */
+void PIOS_DEBUG_AssertFailed(const char *file, uint32_t line)
+{
+#ifdef PIOS_COM_DEBUG
+   __disable_irq();
+   GPIOE->BSRR = 1 << 8 | 1 << 9 | 1 << 10 | 1 << 11 | 1 << 12 | 1 << 13 | 1 << 14 | 1 << 15; // All LED's on
+   sout("ASSERTION_FAILED at ");
+   sout(file);
+   sout("@");
+   dbg_write_hex32(line);
+   sout("\r\n");
+#endif
+
+   // Stay put
+   while (1)
+   {
+      IWDG_ReloadCounter();
+   }
+}
+
+
 /**
   * @}
   * @}

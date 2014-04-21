@@ -1,6 +1,10 @@
 <xml>
-    <object name="DiegoESCConfig" singleinstance="true" settings="false">
-        <description>CAN-ESC Settings</description>
+    <object name="DiegoESCConfig" singleinstance="true" settings="false" category="DiegoESC">
+        <description>Diego-ESC Configuration</description>
+
+        <field name="Cmd" units="" type="enum" options="NoOp,RequestCfg,UpdateAll,UpdateThis" elements="1"/>
+        <field name="CmdAddr" units="" type="uint8" elements="1" defaultvalue="0"/>
+
         <field name="Flags" units="Flag" type="enum" options="FALSE,TRUE" elementnames="DebugPrintEn,BrakeEn,LoadDefaults" />
 
         <!-- 2014-04-21 12:08:57 -> 14, 4, 21, 12, 8, 57  -->

@@ -125,8 +125,7 @@ HEADERS += $$UAVOBJECT_SYNTHETICS/accels.h \
     $$UAVOBJECT_SYNTHETICS/waypointactive.h \
     $$UAVOBJECT_SYNTHETICS/windvelocityactual.h \
     $$UAVOBJECT_SYNTHETICS/diegoescfeedback.h \
-    $$UAVOBJECT_SYNTHETICS/diegoescconfig.h \
-    $$UAVOBJECT_SYNTHETICS/diegoesccmd.h
+    $$UAVOBJECT_SYNTHETICS/diegoescconfig.h
 
 SOURCES += $$UAVOBJECT_SYNTHETICS/accels.cpp \
     $$UAVOBJECT_SYNTHETICS/accessorydesired.cpp \
@@ -231,5 +230,4 @@ SOURCES += $$UAVOBJECT_SYNTHETICS/accels.cpp \
     $$UAVOBJECT_SYNTHETICS/waypointactive.cpp\
     $$UAVOBJECT_SYNTHETICS/windvelocityactual.cpp \
     $$UAVOBJECT_SYNTHETICS/diegoescfeedback.cpp \
-    $$UAVOBJECT_SYNTHETICS/diegoescconfig.cpp \
-    $$UAVOBJECT_SYNTHETICS/diegoesccmd.cpp
+    $$UAVOBJECT_SYNTHETICS/diegoescconfig.cpp

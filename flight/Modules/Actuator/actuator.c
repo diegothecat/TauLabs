@@ -49,7 +49,6 @@
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 #include "diegoescconfig.h"
-#include "diegoesccmd.h"
 #include <candefs.h>
 #include <utils.h>
 #endif
@@ -92,9 +91,8 @@ static volatile bool actuator_settings_updated;
 static volatile bool mixer_settings_updated;
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-static volatile bool diegoesc_settingscmd_updated;
-static volatile bool diegoesc_settings_updated;
-static DiegoESCCmdData diegoEscUpdateCmd;
+static volatile bool diegoesc_config_updated;
+static DiegoESCConfigData diegoESCConfigData;
 #endif
 
 // Private functions
@@ -109,15 +107,13 @@ static void MixerSettingsUpdatedCb(UAVObjEvent * ev);
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 static void DiegoESCInit();
 static void DiegoESCStart();
-static void DiegoESCCmdUpdatedCb(UAVObjEvent * ev);
 static void DiegoESCConfigUpdatedCb(UAVObjEvent * ev);
 static void DiegoESCRequestConfig(uint8_t escAddr);
-static void DiegoESCProcessSettingsCmd();
-static void DiegoESCProcessSettings();
+static void DiegoESCProcessConfig();
 static bool DiegoESCSendDesiredSpeedMsg(int16_t channel[], const Mixer_t mixers[],
-      const ActuatorSettingsData *actuatorSettings, bool motorsArmed);
-static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf);
-static void DiegoESCSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
+                                        const ActuatorSettingsData *actuatorSettings, bool motorsArmed);
+static uint16_t DiegoESCEncodeConfig(DiegoESCConfigData *cfg, uint8_t *buf);
+static void DiegoESCSendConfig(uint8_t *buf, uint16_t buflen, uint8_t escAddr);
 #endif
 
 static void ActuatorSettingsUpdatedCb(UAVObjEvent * ev);
@@ -214,8 +210,7 @@ static void actuatorTask(void* parameters)
 	MixerSettingsGet(&mixerSettings);
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-	diegoesc_settings_updated = false;
-   diegoesc_settingscmd_updated = false;
+	diegoesc_config_updated = false;
 #endif
 
 	/* Force an initial configuration of the actuator update rates */
@@ -245,15 +240,10 @@ static void actuatorTask(void* parameters)
 		}
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
-      if (diegoesc_settingscmd_updated)
+      if (diegoesc_config_updated)
       {
-         diegoesc_settingscmd_updated = false;
-         DiegoESCProcessSettingsCmd();
-      }
-      if (diegoesc_settings_updated)
-      {
-         diegoesc_settings_updated = false;
-         DiegoESCProcessSettings();
+         diegoesc_config_updated = false;
+         DiegoESCProcessConfig();
       }
 #endif
 
@@ -808,9 +798,6 @@ static void MixerSettingsUpdatedCb(UAVObjEvent * ev)
 
 static void DiegoESCInit()
 {
-   DiegoESCCmdInitialize();
-   DiegoESCCmdConnectCallback(DiegoESCCmdUpdatedCb);
-
    DiegoESCConfigInitialize();
    DiegoESCConfigConnectCallback(DiegoESCConfigUpdatedCb);
 }
@@ -819,62 +806,51 @@ static void DiegoESCStart()
 {
 }
 
-static void DiegoESCCmdUpdatedCb(UAVObjEvent * ev)
-{
-   diegoesc_settingscmd_updated = true;
-}
-
 static void DiegoESCConfigUpdatedCb(UAVObjEvent * ev)
 {
-   diegoesc_settings_updated = true;
+   diegoesc_config_updated = true;
 }
 
-static void DiegoESCProcessSettings()
+static void DiegoESCProcessConfig()
 {
-}
+   DiegoESCConfigGet(&diegoESCConfigData);
+   uint8_t escAddr = diegoESCConfigData.CmdAddr &= 0xF;
+   uint8_t cmd = diegoESCConfigData.Cmd;
 
-static void DiegoESCProcessSettingsCmd()
-{
-   DiegoESCCmdGet(&diegoEscUpdateCmd);
+   // DiegoESCPrintConfig(&cfg);
 
-   diegoEscUpdateCmd.EscAddr &= 0xF;
-
-   // PrintDiegoESCSettings(&cfg);
-
-   if (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_REQUESTCFG)
+   if (cmd == DIEGOESCCONFIG_CMD_REQUESTCFG)
    {
       DiegoESCConfigSetDefaults(DiegoESCConfigHandle(), 0);
-      DiegoESCRequestConfig(diegoEscUpdateCmd.EscAddr);
+      DiegoESCRequestConfig(escAddr);
    }
-   else if (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATEALL || diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATETHIS)
+   else if (cmd == DIEGOESCCONFIG_CMD_UPDATEALL || cmd == DIEGOESCCONFIG_CMD_UPDATETHIS)
    {
-      DiegoESCConfigData escSettings;
-      DiegoESCConfigGet(&escSettings); // User should manually update the UAV obj.
-
       uint8_t buf[CAN_CFG_BUFLEN];
-      uint16_t buflen = DiegoESCEncodeSettings(&escSettings, buf);
+      uint16_t buflen = DiegoESCEncodeConfig(&diegoESCConfigData, buf);
 
-      DiegoESCSendSettings(buf, buflen,
-         (diegoEscUpdateCmd.Cmd == DIEGOESCCMD_CMD_UPDATETHIS) ? diegoEscUpdateCmd.EscAddr : 0xFF);
+      DiegoESCSendConfig(buf, buflen,
+            (cmd == DIEGOESCCONFIG_CMD_UPDATETHIS) ? escAddr : 0xFF);
    }
 }
 
 static void DiegoESCRequestConfig(uint8_t escAddr)
 {
-   uint8_t buf[5] = { 0 };
+   struct pios_can_msgheader canMsgHdr = { 0 };
+   uint8_t dummy = 0;
 
    // Request configuration from specific ESC
-   uint32_t extId = CAN_RSVD_MASK
+   canMsgHdr.CanId = CAN_RSVD_MASK
           | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
           | (CAN_BLDC_CMD_CFGREQ << CAN_CMD_SHIFT)
           | (escAddr << CAN_CMDARG_SHIFT)
           | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
           | MY_CAN_ADDRESS;
-
-   UnalignedWr32(extId, buf);
+   canMsgHdr.IDE = PIOS_CAN_ID_EXT;
+   canMsgHdr.DLC = 1;
 
    // Send one dummy payload Byte to make the PIOS CAN driver happy!
-   PIOS_COM_SendBuffer(pios_com_can_id, buf, sizeof(buf));
+   PIOS_COM_CAN_SendMsg(pios_com_can_id, &canMsgHdr, &dummy);
 }
 
 static bool DiegoESCSendDesiredSpeedMsg(
@@ -884,16 +860,19 @@ static bool DiegoESCSendDesiredSpeedMsg(
       bool motorsArmed)
 {
    bool success = true;
-   uint32_t ubuf[3] = { 0 };
-   uint8_t *bufp = (uint8_t *) (ubuf + 1);
+   struct pios_can_msgheader canMsgHdr = { 0 };
+   uint8_t buf[PIOS_CAN_MAX_LEN] = { 0 };
+
    uint8_t bldcAddrMask = 0xF; // Address all ESC's
    uint8_t cmd = CAN_BLDC_CMD_SPEED | CAN_BLDC_SUBCMD_SPEEDOP;
-   uint32_t extId = CAN_RSVD_MASK | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
+   canMsgHdr.CanId = CAN_RSVD_MASK | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
          | ((uint32_t) cmd << CAN_CMD_SHIFT)
          | ((uint32_t) bldcAddrMask << CAN_CMDARG_SHIFT)
          | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
          | MY_CAN_ADDRESS;
-   ubuf[0] = extId;
+   canMsgHdr.IDE = PIOS_CAN_ID_EXT;
+   canMsgHdr.DLC = PIOS_CAN_MAX_LEN;
+
    int escIdx = 0;
 
    for (int n = 0; n < ACTUATORCOMMAND_CHANNEL_NUMELEM; ++n)
@@ -903,8 +882,8 @@ static bool DiegoESCSendDesiredSpeedMsg(
           && escIdx < MAX_CANESC_CNT)
       {
          int16_t val = motorsArmed ? channel[n] : 0;
-         bufp[escIdx * 2 + 0] = val & 0xFF;
-         bufp[escIdx * 2 + 1] = val >> 8;
+         buf[escIdx * 2 + 0] = val & 0xFF;
+         buf[escIdx * 2 + 1] = val >> 8;
 
          escIdx++;
          success &= true;
@@ -916,12 +895,12 @@ static bool DiegoESCSendDesiredSpeedMsg(
    }
 
    // Send message to CAN bus
-   if (escIdx > 0)  PIOS_COM_SendBufferNonBlocking(pios_com_can_id, (uint8_t *) ubuf, sizeof(ubuf));
+   if (escIdx > 0)  PIOS_COM_CAN_SendMsg(pios_com_can_id, &canMsgHdr, buf);
 
    return success;
 }
 
-static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf)
+static uint16_t DiegoESCEncodeConfig(DiegoESCConfigData *cfg, uint8_t *buf)
 {
    uint8_t *bufp = buf;
 
@@ -932,17 +911,16 @@ static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf)
    bufp = UnalignedWr32(CAN_CFG_VALIDFLAGS_ALLMSK, bufp);
 
    // Flags
-   *bufp =
+   bufp = UnalignedWr8(
            (cfg->Flags[DIEGOESCCONFIG_FLAGS_DEBUGPRINTEN] ? ECfUartEn : 0)
          | (cfg->Flags[DIEGOESCCONFIG_FLAGS_BRAKEEN] ? ECfBrakeEn : 0)
-         | (cfg->Flags[DIEGOESCCONFIG_FLAGS_LOADDEFAULTS] ? ECfLoadDefaults : 0);
-   bufp++;
+         | (cfg->Flags[DIEGOESCCONFIG_FLAGS_LOADDEFAULTS] ? ECfLoadDefaults : 0)
+         , bufp);
 
    if (! cfg->Flags[DIEGOESCCONFIG_FLAGS_LOADDEFAULTS])
    {
       // MotorPolePairs
-      *(uint8_t *) bufp = cfg->MotorPolePairs;
-      bufp++;
+      bufp = UnalignedWr8(cfg->MotorPolePairs, bufp);
 
       // MotorKv
       bufp = UnalignedWr16(cfg->MotorKv, bufp);
@@ -957,8 +935,7 @@ static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf)
       bufp = UnalignedWr16(cfg->MaxAcceleration, bufp);
 
       // MaxCycleTimeMs
-      *(uint8_t *) bufp = (uint8_t) cfg->MaxCycleTime;
-      bufp++;
+      bufp = UnalignedWr8(cfg->MaxCycleTime, bufp);
 
       // AlignTimeMs
       bufp = UnalignedWr16(cfg->AlignTime, bufp);
@@ -991,38 +968,36 @@ static uint16_t DiegoESCEncodeSettings(DiegoESCConfigData *cfg, uint8_t *buf)
    return *buf;
 }
 
-static void DiegoESCSendSettings(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
+static void DiegoESCSendConfig(uint8_t *buf, uint16_t buflen, uint8_t escAddr)
 {
+   struct pios_can_msgheader canMsgHdr = { 0 };
    uint8_t *bufp = buf;
-   uint8_t msgLen;
-   uint32_t msgBuf[3];
-   uint32_t extId;
-   uint8_t cmd;
 
    for (int i = 0; buflen > 0; ++i)
    {
-      msgLen = MIN(buflen, CAN_MAX_PAYLOADLEN);
-
-      cmd = CAN_BLDC_CMD_CFG | (i & 0XF);
-      extId = CAN_RSVD_MASK
+      uint8_t cmd = CAN_BLDC_CMD_CFG | (i & 0XF);
+      canMsgHdr.CanId = CAN_RSVD_MASK
             | (CAN_UNIT_BLDC << CAN_DSTUNIT_SHIFT)
             | ((uint32_t) cmd << CAN_CMD_SHIFT)
             | ((uint32_t) escAddr << CAN_CMDARG_SHIFT)
             | (CAN_UNIT_FCTRL << CAN_SRCUNIT_SHIFT)
             | MY_CAN_ADDRESS;
+      canMsgHdr.IDE = PIOS_CAN_ID_EXT;
+      canMsgHdr.DLC = MIN(buflen, CAN_MAX_PAYLOADLEN);
 
-      msgBuf[0] = extId;
-      memcpy((uint8_t *)(msgBuf + 1), bufp, msgLen);
+#if 0
+      PIOS_COM_SendFormattedString(pios_com_debug_id, "CAN TX (%d)\r\n", canMsgHdr.DLC);
+#endif
 
-      // Send CAN msg (block if buffer is full)
-      PIOS_COM_SendBuffer(pios_com_can_id, (uint8_t *) msgBuf, msgLen + sizeof(uint32_t));
+      // Send CAN message
+      PIOS_COM_CAN_SendMsg(pios_com_can_id, &canMsgHdr, bufp);
 
-      bufp += msgLen;
-      buflen -= msgLen;
+      bufp += canMsgHdr.DLC;
+      buflen -= canMsgHdr.DLC;
    }
 }
 
-void PrintDiegoESCSettings(DiegoESCConfigData *cfg)
+void DiegoESCPrintConfig(DiegoESCConfigData *cfg)
 {
    // Send buffer is limited to 128 Byte. Print out in chunks.
    PIOS_COM_SendFormattedString(pios_com_debug_id,

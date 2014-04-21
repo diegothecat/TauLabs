@@ -1,5 +1,5 @@
 <xml>
-    <object name="DiegoESCFeedback" singleinstance="true" settings="false">
+    <object name="DiegoESCFeedback" singleinstance="true" settings="false" category="DiegoESC">
         <description>Sensor data from Diego-ESC motor controllers.</description>
         <field name="Current" units="A" type="float" elementnames="ESC0,ESC1,ESC2,ESC3"/>
         <field name="RPM" units="RPM" type="uint32" elementnames="ESC0,ESC1,ESC2,ESC3"/>

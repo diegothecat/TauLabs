@@ -31,6 +31,8 @@
 #if !defined(PIOS_CAN_PRIV_H)
 #define PIOS_CAN_PRIV_H
 
+#define CAN_CHANNEL_BUFSIZE  128
+
 extern const struct pios_com_driver pios_can_com_driver;
 
 struct pios_can_cfg {
@@ -42,6 +44,23 @@ struct pios_can_cfg {
 	struct stm32_irq rx_irq;    //! Configuration for IRQ
 	struct stm32_irq tx_irq;    //! Configuration for IRQ
 };
+
+
+enum pios_can_ch_magic
+{
+   PIOS_CAN_CH_MAGIC = 0xDEADBABE
+};
+
+struct pios_can_channel
+{
+   enum pios_can_ch_magic magic;
+   uintptr_t com_id;
+   uint8_t rx_buf[CAN_CHANNEL_BUFSIZE];
+   pios_com_callback rx_in_cb;
+};
+
+#define CAN_DEBUG_Assert(test) if (!(test)) PIOS_DEBUG_AssertFailed(__FILE__, __LINE__);
+#define CAN_Assert(test) PIOS_DEBUG_Assert(test)
 
 /**
  * Initialize the CAN driver and return an opaque id
