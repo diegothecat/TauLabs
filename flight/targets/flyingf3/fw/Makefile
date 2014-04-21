@@ -42,6 +42,7 @@ MODULES += ManualControl
 MODULES += Stabilization
 MODULES += FirmwareIAP
 MODULES += Telemetry
+MODULES += DiegoESC
 
 OPTMODULES += GPS
 OPTMODULES += CameraStab

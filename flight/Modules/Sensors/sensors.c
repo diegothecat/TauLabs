@@ -49,7 +49,6 @@
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 #include "diegoescfeedback.h"
-#include "diegoescconfig.h"
 #endif
 
 // Shared headers
@@ -95,18 +94,6 @@ static AccelsData accelsData;
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 static DiegoESCFeedbackData diegoESCFeedbackData;
-static DiegoESCConfigData diegoESCConfigData;
-
-typedef struct
-{
-   uint8_t LastCfgSeqNo;
-   uint8_t BytesRcvd;
-   uint8_t PayloadLen;
-   uint8_t Buf[CAN_CFG_BUFLEN];
-   uint8_t *BufPtr;
-} CfgMsgState;
-
-static CfgMsgState gCfgMsgState[MAX_CANESC_CNT];
 static uint32_t canChId;
 #endif
 
@@ -154,6 +141,7 @@ static int32_t SensorsInitialize(void)
 	INSSettingsInitialize();
 
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
+
 	DiegoESCFeedbackInitialize();
 
 	// Create virtual channel...
@@ -170,10 +158,6 @@ static int32_t SensorsInitialize(void)
                    | (CAN_BLDC_CMD_INF << CAN_CMD_SHIFT);
    PIOS_COM_CAN_AddFilter(canChId, &canFilter);
 
-   // Message Filter for CAN_BLDC_CMD_CFG
-   canFilter.IdMask32.CanId = (CAN_UNIT_FCTRL << CAN_DSTUNIT_SHIFT)
-                   | (CAN_BLDC_CMD_CFG << CAN_CMD_SHIFT);
-   PIOS_COM_CAN_AddFilter(canChId, &canFilter);
 #endif // PIOS_INCLUDE_DIEGO_ESC
 
 	rotate = 0;
@@ -523,47 +507,6 @@ static void DiegoESCUpdateFeedback(const struct pios_can_msgheader *msgHdr, cons
    DiegoESCFeedbackSet(&diegoESCFeedbackData);
 }
 
-static bool DiegoESCDesequenceCANConfigMsg(const struct pios_can_msgheader *msgHdr,
-      const uint8_t *buf, uint8_t buflen, uint8_t *escIdx)
-{
-   uint8_t seqNo = (msgHdr->CanId >> CAN_CMD_SHIFT) & 0xF;
-   const uint8_t *bufp = buf;
-
-   *escIdx = msgHdr->CanId & 0xF;
-   if (*escIdx >= MAX_CANESC_CNT) return false;
-
-   CfgMsgState *msgState = gCfgMsgState + *escIdx;
-
-   if (seqNo == 0)
-   {
-      msgState->BufPtr = msgState->Buf;
-      msgState->BytesRcvd = 0;
-      msgState->PayloadLen = bufp[0];
-   }
-   else if (seqNo != msgState->LastCfgSeqNo + 1)
-   {
-      return false; // Sequence error
-   }
-
-   msgState->BytesRcvd += buflen;
-   if (msgState->BytesRcvd > CAN_CFG_BUFLEN)
-   {
-      return false; // Shouldn't happen
-   }
-
-   memcpy(msgState->BufPtr, bufp, buflen);
-
-   msgState->BufPtr += buflen;
-   msgState->LastCfgSeqNo = seqNo;
-
-   if (msgState->BytesRcvd != msgState->PayloadLen)
-   {
-      return false;
-   }
-
-   return true;
-}
-
 inline static uint8_t Decode32(uint32_t *dst, uint8_t *src, uint32_t valid, uint32_t mask)
 {
    if (valid & mask)
@@ -594,150 +537,6 @@ inline static uint8_t Decode8(uint8_t *dst, uint8_t *src, uint32_t valid, uint32
    return 0;
 }
 
-static void DiegoESCDecodeConfig(uint8_t *buf, DiegoESCConfigData *cfg)
-{
-   uint8_t buf8;
-   uint16_t buf16;
-   uint32_t buf32;
-   uint8_t *bufp = buf;
-
-   // Skip payload length field (1 Byte)
-   bufp++;
-
-   // ValidMask
-   uint32_t validMask = UnalignedRd32(bufp);
-   bufp += 4;
-
-   // Flags
-   if (Decode8(&buf8, bufp, validMask, EFlFlags))
-   {
-      bufp++;
-      if (buf8 & ECfUartEn) cfg->Flags[DIEGOESCCONFIG_FLAGS_DEBUGPRINTEN] = 1;
-      if (buf8 & ECfBrakeEn) cfg->Flags[DIEGOESCCONFIG_FLAGS_BRAKEEN] = 1;
-   }
-
-   // MotorPolePairs
-   bufp += Decode8(&cfg->MotorPolePairs, bufp, validMask, EFlMotorPolePairs);
-
-   // MotorKv
-   bufp += Decode16(&cfg->MotorKv, bufp, validMask, EFlMotorKv);
-
-   // MotorMaxCurrentMa
-   if (Decode16(&buf16, bufp, validMask, EFlMotorMaxCurrentMa))
-   {
-      bufp += 2;
-      cfg->MotorMaxCurrent = buf16 / 1000.0f;
-   }
-
-   // MotorMaxPower
-   bufp += Decode16(&cfg->MotorMaxPower, bufp, validMask, EflMotorMaxPower);
-
-   // MaxAcceleration
-   bufp += Decode16(&cfg->MaxAcceleration, bufp, validMask, EflMaxAcceleration);
-
-   // MaxCycleTimeMs
-   if (Decode8(&buf8, bufp, validMask, EFlMaxCycleTimeMs))
-   {
-      bufp++;
-      cfg->MaxCycleTime = buf8;
-   }
-
-   // AlignTimeMs
-   bufp += Decode16(&cfg->AlignTime, bufp, validMask, EFlAlignTimeMs);
-
-   // AlignCurrentMa
-   bufp += Decode16(&cfg->AlignCurrent, bufp, validMask, EFlAlignCurrentMa);
-
-   // RampUpTimeMs
-   bufp += Decode16(&cfg->RampUpTime, bufp, validMask, EFlRampUpTimeMs);
-
-   // RampUpStartPeriod
-   bufp += Decode16(&cfg->RampUpStartPeriod, bufp, validMask, EFlRampUpStartPeriodUs);
-
-   // RampUpEndPeriod
-   bufp += Decode16(&cfg->RampUpEndPeriod, bufp, validMask, EFlRampUpEndPeriodUs);
-
-   // MinPwmPerMil
-   if (Decode16(&buf16, bufp, validMask, EFlMinPwmPerMil))
-   {
-      bufp += 2;
-      cfg->MinPWM = buf16 / 10.0f;
-   }
-
-   // MaxPwmPerMil
-   if (Decode16(&buf16, bufp, validMask, EFlMaxPwmPerMil))
-   {
-      bufp += 2;
-      cfg->MaxPWM = buf16 / 10.0f;
-   }
-
-   // MinBatVoltageMv
-   if (Decode16(&buf16, bufp, validMask, EFlMinBatVoltageMv))
-   {
-      bufp += 2;
-      cfg->MinBatVoltage = buf16 / 1000.0f;
-   }
-
-   // BuildNo
-   if (Decode16(&buf16, bufp, validMask, EFlBuildNo))
-   {
-      bufp += 2;
-      cfg->BuildVersion[0] = buf16;
-   }
-
-   // BuildDate
-   for (int i = 0; i < 6; ++i)
-   {
-      if (Decode8(&buf8, bufp, validMask, EFlBuildDate))
-      {
-         bufp++;
-         cfg->BuildDate[i] = buf8;
-      }
-   }
-
-   // BuildGitHash
-   if (Decode32(&buf32, bufp, validMask, EFlBuildGitHash))
-   {
-      bufp += 4;
-      cfg->BuildVersion[1] = buf32;
-   }
-
-   // Station address
-   if (Decode8(&buf8, bufp, validMask, EFlEscAddr))
-   {
-      bufp++;
-      cfg->ESCAddr = buf8;
-   }
-
-   // SerialNo
-   for (int i = 0; i < 3; ++i)
-   {
-      if (Decode32(&buf32, bufp, validMask, EFlSerialNo))
-      {
-         bufp += 4;
-         cfg->HwSerialNo[i] = buf32;
-      }
-   }
-}
-
-void DiegoESCPrintConfig(DiegoESCConfigData *cfg);
-
-static void DiegoESCUpdateConfig(const struct pios_can_msgheader *msgHdr, const uint8_t *buf, uint8_t buflen)
-{
-   uint8_t updatedEscIdx;
-   if (DiegoESCDesequenceCANConfigMsg(msgHdr, buf, buflen, &updatedEscIdx))
-   {
-      // Received a complete configuration msg
-
-      DiegoESCConfigGet(&diegoESCConfigData);
-      DiegoESCDecodeConfig(gCfgMsgState[updatedEscIdx].Buf, &diegoESCConfigData);
-
-      // PrintEscSettings(&diegoESCConfigData);
-
-      DiegoESCConfigSet(&diegoESCConfigData);
-   }
-}
-
 static void DiegoESCProcessCANMsgs()
 {
    struct pios_can_msgheader msgHdr = { 0 };
@@ -752,11 +551,13 @@ static void DiegoESCProcessCANMsgs()
 
       switch (cmd)
       {
+         /*
          case CAN_BLDC_CMD_CFG:
          {
             DiegoESCUpdateConfig(&msgHdr, buf, msgHdr.DLC);
             break;
          }
+         */
          case CAN_BLDC_CMD_INF:
          {
             if (msgHdr.DLC != 8) break;
