@@ -115,6 +115,12 @@ void PIOS_SYS_Init(void)
 			       RCC_APB2Periph_SYSCFG |
 			0, ENABLE);
 
+   /*
+    * Remap the USB interrupts (USB_HP, USB_LP and USB_WKUP) on interrupt lines 74, 75 and 76.
+    * This frees up USB_LP_CAN1_RX0_IRQHandler for the pios_can.c driver (RX FIFO0 interrupt)
+    */
+	SYSCFG_USBInterruptLineRemapCmd(ENABLE);
+
 	/*
 	 * Configure all pins as input / pullup to avoid issues with
 	 * uncommitted pins, excepting special-function pins that we need to

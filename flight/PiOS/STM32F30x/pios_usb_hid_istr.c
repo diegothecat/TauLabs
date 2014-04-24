@@ -46,7 +46,7 @@ EP1_OUT_Callback, EP2_OUT_Callback, EP3_OUT_Callback, EP4_OUT_Callback, EP5_OUT_
 * Output         :
 * Return         :
 *******************************************************************************/
-void USB_LP_CAN1_RX0_IRQHandler(void)	//USB_Istr(void)
+void USB_LP_IRQHandler(void)	//USB_Istr(void)
 {
 
 	wIstr = _GetISTR();

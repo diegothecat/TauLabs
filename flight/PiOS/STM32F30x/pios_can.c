@@ -92,6 +92,7 @@ static struct pios_can_channel *FilterMapping[CAN_MAX_FILTERS];
 
 
 void USB_HP_CAN1_TX_IRQHandler(void);
+void USB_LP_CAN1_RX0_IRQHandler(void);
 
 static bool PIOS_CAN_validate(struct pios_can_dev *can_dev)
 {
@@ -247,9 +248,16 @@ static void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_
 #endif // DEBUG_PRINT_MSG
 
 /**
+ * @brief  This function handles CAN1 RX0 request.
+ * @note   The USB IRQ handler is remapped to USB_LP_IRQHandler in PIOS_SYS_Init().
+ */
+void USB_LP_CAN1_RX0_IRQHandler(void)
+{
+
+}
+
+/**
  * @brief  This function handles CAN1 RX1 request.
- * @note   We are using RX1 instead of RX0 to avoid conflicts with the
- *         USB IRQ handler.
  */
 void CAN1_RX1_IRQHandler(void)
 {
