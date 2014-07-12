@@ -37,6 +37,7 @@
 
 #include "pios_can_priv.h"
 
+#include <utils.h>
 #if defined(PIOS_INCLUDE_DIEGO_ESC)
 #  include <candefs.h>
 #  define MY_ADDRESS 0xA
@@ -48,9 +49,6 @@ static void PIOS_CAN_RegisterRxCallback(uintptr_t can_id, pios_com_callback rx_i
 static void PIOS_CAN_RegisterTxCallback(uintptr_t can_id, pios_com_callback tx_out_cb, uintptr_t context);
 static void PIOS_CAN_TxStart(uintptr_t can_id, uint16_t tx_bytes_avail);
 static void PIOS_CAN_RxStart(uintptr_t can_id, uint16_t rx_bytes_avail);
-
-static bool GetCanTxMsg(CanTxMsg *msg, bool *ptx_need_yield);
-static void ReceiveCanMsg(struct pios_can_msgheader *canMsgHdr, CanRxMsg *canMsg);
 
 const struct pios_com_driver pios_can_com_driver = {
 	.tx_start   = PIOS_CAN_TxStart,
@@ -73,9 +71,22 @@ struct pios_can_dev {
 	uintptr_t tx_out_context;
 };
 
+typedef struct
+{
+   struct pios_can_msgheader CanMsgHdr;
+   uint8_t Buf[PIOS_CAN_MAX_LEN];
+   uint8_t FMI; // Filter match index
+} __attribute__ ((packed)) CanMsg;
+
+
+
+static bool UnQueueCANTxMsg(CanMsg *msg, bool *ptx_need_yield);
+static void ReceiveCanMsg(CanMsg *msg, uint8_t fifoNo, volatile uint32_t *RFxR);
+
+
 // Local constants
 #define CAN_COM_ID      0x11
-#define MAX_SEND_LEN    8
+//#define MAX_SEND_LEN    8
 
 
 #define CAN_MAX_FILTER_BANKS  14 // STM32F3 has 14 filter banks
@@ -90,9 +101,96 @@ static int NumFilterBanks;
 static struct pios_can_channel *FilterMapping[CAN_MAX_FILTERS];
 
 
+//! The local handle for the CAN device
+static struct pios_can_dev *can_dev;
 
 void USB_HP_CAN1_TX_IRQHandler(void);
 void USB_LP_CAN1_RX0_IRQHandler(void);
+
+
+void _FORCE_INLINE ReceiveCanMsg(CanMsg *msg, uint8_t fifoNo, __IO uint32_t *RFxR)
+{
+   __IO CAN_FIFOMailBox_TypeDef *mbox = &can_dev->cfg->regs->sFIFOMailBox[fifoNo];
+   uint32_t rir = mbox->RIR;
+   uint32_t rdtr = mbox->RDTR;
+   uint32_t rdlr = mbox->RDLR;
+   uint32_t rdhr = mbox->RDHR;
+
+   UnalignedWr32(rdlr, msg->Buf);
+   UnalignedWr32(rdhr, msg->Buf + 4);
+   msg->CanMsgHdr.IDE = (rir & CAN_RI0R_IDE) >> 2;
+   msg->CanMsgHdr.CanId = msg->CanMsgHdr.IDE ? (rir >> 3) : (rir >> 21);
+   msg->CanMsgHdr.DLC = rdtr & CAN_RDT0R_DLC;
+   msg->FMI = (uint8_t)(rdtr >> 8);
+
+   // Releases the mailbox
+   *RFxR = CAN_RF0R_RFOM0;
+}
+
+void _FORCE_INLINE SendCANMsg(const CanMsg *msg, uint8_t mboxNo)
+{
+   __IO CAN_TxMailBox_TypeDef *mbox = &can_dev->cfg->regs->sTxMailBox[mboxNo];
+   uint32_t tir = msg->CanMsgHdr.IDE
+         ? ( (msg->CanMsgHdr.CanId << 3) | CAN_TI0R_IDE )
+         : (msg->CanMsgHdr.CanId << 21);
+   mbox->TDTR = msg->CanMsgHdr.DLC;
+   mbox->TDLR = UnalignedRd32(msg->Buf);
+   mbox->TDHR = UnalignedRd32(msg->Buf + 4);
+   mbox->TIR = tir | CAN_TI0R_TXRQ;
+}
+
+static void HandleCANRx(__IO uint32_t *RFxR, uint8_t fifoNo)
+{
+   *RFxR = CAN_RF0R_FMP0; // Acknowledge interrupt
+
+   bool rx_need_yield = false;
+
+   CanMsg msg;
+
+   // Each FIFO has 3 mailboxes. Read until FIFO is empty
+   for (int i = 0; (*RFxR & CAN_RF0R_FMP0) && i < 3; ++i)
+   {
+      // Receive CAN message from hardware
+      ReceiveCanMsg(&msg, fifoNo, RFxR);
+
+      CAN_DEBUG_Assert(msg.FMI < CAN_MAX_FILTERS);
+
+      // Lookup the channel based on the filter match index
+      struct pios_can_channel *can_ch = FilterMapping[msg.FMI];
+      CAN_DEBUG_Assert(can_ch && can_ch->magic == PIOS_CAN_CH_MAGIC);
+
+      bool yield = false;
+      // Write received message into the channel FIFO. This is actually PIOS_COM_RxInCallback()
+      (void) (can_ch->rx_in_cb)(can_ch->com_id, (uint8_t *)&msg.CanMsgHdr,
+            sizeof(struct pios_can_msgheader) + msg.CanMsgHdr.DLC, NULL, &yield);
+      rx_need_yield |= yield;
+   }
+
+   portEND_SWITCHING_ISR(rx_need_yield);
+}
+
+static bool UnQueueCANTxMsg(CanMsg *msg, bool *ptx_need_yield)
+{
+   bool yield = false;
+
+   // Read CAN message header from PIOS FIFO
+   uint16_t msgLen = (can_dev->tx_out_cb)
+         (can_dev->tx_out_context, (uint8_t *) &msg->CanMsgHdr, sizeof(struct pios_can_msgheader), NULL, &yield);
+   *ptx_need_yield |= yield;
+   if (! msgLen) return false;
+
+   CAN_DEBUG_Assert(msgLen == sizeof(struct pios_can_msgheader) && msg->CanMsgHdr.DLC <= PIOS_CAN_MAX_LEN);
+
+   // Read CAN payload data from PIOS FIFO
+   msgLen = msg->CanMsgHdr.DLC
+      ? (can_dev->tx_out_cb)(can_dev->tx_out_context, (uint8_t *) msg->Buf, msg->CanMsgHdr.DLC, NULL, &yield)
+      : 0;
+   *ptx_need_yield |= yield;
+
+   CAN_DEBUG_Assert(msgLen == msg->CanMsgHdr.DLC);
+
+   return true;
+}
 
 static bool PIOS_CAN_validate(struct pios_can_dev *can_dev)
 {
@@ -116,8 +214,6 @@ static struct pios_can_dev *PIOS_CAN_alloc(void)
 	return(can_dev);
 }
 
-//! The local handle for the CAN device
-static struct pios_can_dev *can_dev;
 
 /**
  * Initialize the CAN driver and return an opaque id
@@ -191,8 +287,7 @@ static void PIOS_CAN_TxStart(uintptr_t can_id, uint16_t tx_bytes_avail)
 
    // TX interrupt is disabled (means previous job is done)
 
-   CAN_ClearITPendingBit(can_dev->cfg->regs, CAN_IT_TME);
-	CAN_ITConfig(can_dev->cfg->regs, CAN_IT_TME, ENABLE);
+	can_dev->cfg->regs->IER |= CAN_IER_TMEIE; // Enable TX interrupt
 
 	NVIC_DisableIRQ(USB_HP_CAN1_TX_IRQn); // Protect from simultaneous accessing the FIFO from ISR.
 
@@ -246,141 +341,6 @@ static void PrinCanMsg(const char *prfx, uint32_t extId, uint8_t *canbuf, uint8_
    PIOS_COM_SendBuffer(pios_com_debug_id, (uint8_t *) buf, slen);
 }
 #endif // DEBUG_PRINT_MSG
-
-/**
- * @brief  This function handles CAN1 RX0 request.
- * @note   The USB IRQ handler is remapped to USB_LP_IRQHandler in PIOS_SYS_Init().
- */
-void USB_LP_CAN1_RX0_IRQHandler(void)
-{
-
-}
-
-/**
- * @brief  This function handles CAN1 RX1 request.
- */
-void CAN1_RX1_IRQHandler(void)
-{
-   CAN_ClearITPendingBit(can_dev->cfg->regs, CAN_IT_FMP1);
-
-   CAN_DEBUG_Assert(PIOS_CAN_validate(can_dev));
-
-   bool rx_need_yield = false;
-
-   uint8_t buf[sizeof(struct pios_can_msgheader) + PIOS_CAN_MAX_LEN] __attribute__ ((aligned (4)));
-   struct pios_can_msgheader *canMsgHdr = (struct pios_can_msgheader *)buf;
-   CanRxMsg rxMsg = { 0 };
-
-   // Each FIFO has 3 mailboxes. Read until FIFO1 is empty
-   for (int i = 0; (can_dev->cfg->regs->RF1R & CAN_RF1R_FMP1) && i < 3; ++i)
-   {
-      // Receive msg from hardware
-      ReceiveCanMsg(canMsgHdr, &rxMsg);
-
-      if (rxMsg.DLC)  memcpy(buf + sizeof(struct pios_can_msgheader), rxMsg.Data, rxMsg.DLC);
-
-      CAN_DEBUG_Assert(rxMsg.FMI < CAN_MAX_FILTERS);
-
-      // Lookup the channel based on the filter match index
-      struct pios_can_channel *can_ch = FilterMapping[rxMsg.FMI];
-      CAN_DEBUG_Assert(can_ch && can_ch->magic == PIOS_CAN_CH_MAGIC);
-
-      bool yield = false;
-      // Write received msg into the channel FIFO. This is actually PIOS_COM_RxInCallback()
-      (void) (can_ch->rx_in_cb)(can_ch->com_id, buf,
-            sizeof(struct pios_can_msgheader) + canMsgHdr->DLC, NULL, &yield);
-      rx_need_yield |= yield;
-
-#  if defined(DEBUG_PRINT_MSG) && 0
-      PrinCanMsg("RX", rxMsg.ExtId, rxMsg.Data, rxMsg.DLC);
-#  endif
-   }
-
-   portEND_SWITCHING_ISR(rx_need_yield);
-}
-
-/**
- * @brief  This function handles CAN1 TX irq and sends more data if available
- */
-void USB_HP_CAN1_TX_IRQHandler(void)
-{
-   CAN_ClearITPendingBit(can_dev->cfg->regs, CAN_IT_TME);
-
-   //PIOS_COM_SendFormattedString(pios_com_debug_id, "CANTXINT TX (%x)\r\n", can_dev->cfg->regs->TSR);
-
-   CAN_DEBUG_Assert(PIOS_CAN_validate(can_dev));
-
-   bool tx_need_yield = false;
-
-   // There a 3 TX mailboxes. Write up to three mailboxes, if empty.
-   for (int i = 0; (can_dev->cfg->regs->TSR & CAN_TSR_TME) && i < 3; ++i)
-   {
-      // Any of the 3 TX mailboxes is empty
-
-      bool yield = false;
-      CanTxMsg msg;
-      if (!GetCanTxMsg(&msg, &yield))
-      {
-         CAN_ITConfig(can_dev->cfg->regs, CAN_IT_TME, DISABLE);
-         break;
-      }
-      tx_need_yield |= yield;
-
-#  if defined(DEBUG_PRINT_MSG) && 0
-      if (msg.ExtId != 0x10230f1a)  PrinCanMsg("TX", msg.ExtId, msg.Data, msg.DLC);
-#  endif
-
-      // Send message and get mailbox number
-      CAN_Transmit(can_dev->cfg->regs, &msg);
-
-   } // for
-
-   portEND_SWITCHING_ISR(tx_need_yield);
-}
-
-static bool GetCanTxMsg(CanTxMsg *msg, bool *ptx_need_yield)
-{
-   struct pios_can_msgheader canMsgHdr = { 0 };
-
-   // Get CAN message header from FIFO
-   uint16_t msgLen = (can_dev->tx_out_cb)
-         (can_dev->tx_out_context, (uint8_t *) &canMsgHdr, sizeof(canMsgHdr), NULL, ptx_need_yield);
-   if (! msgLen) return false;
-
-   CAN_DEBUG_Assert(msgLen == sizeof(canMsgHdr) && canMsgHdr.DLC <= MAX_SEND_LEN);
-
-   // Get CAN payload data from FIFO
-   msgLen = canMsgHdr.DLC
-      ? (can_dev->tx_out_cb)(can_dev->tx_out_context, (uint8_t *) msg->Data, canMsgHdr.DLC, NULL, ptx_need_yield)
-      : 0;
-
-   CAN_DEBUG_Assert(msgLen == canMsgHdr.DLC);
-
-   msg->StdId = canMsgHdr.CanId;
-   msg->ExtId = canMsgHdr.CanId;
-   msg->IDE = (canMsgHdr.IDE == PIOS_CAN_ID_EXT) ? CAN_Id_Extended : CAN_Id_Standard;
-   msg->RTR = CAN_RTR_DATA;
-   msg->DLC = msgLen;
-
-   return true;
-}
-
-static void ReceiveCanMsg(struct pios_can_msgheader *canMsgHdr, CanRxMsg *canMsg)
-{
-   CAN_Receive(CAN1, CAN_FIFO1, canMsg);
-
-   if (canMsg->IDE == CAN_Id_Extended)
-   {
-      canMsgHdr->CanId = canMsg->ExtId;
-      canMsgHdr->IDE = PIOS_CAN_ID_EXT;
-   }
-   else
-   {
-      canMsgHdr->CanId = canMsg->StdId;
-      canMsgHdr->IDE = PIOS_CAN_ID_STD;
-   }
-   canMsgHdr->DLC = canMsg->DLC;
-}
 
 static void CanFilterAddIdMask32(uint8_t filterNo, uint32_t mask, uint32_t filter)
 {
@@ -461,6 +421,56 @@ pios_can_filterid PIOS_COM_CAN_AddFilter(uint32_t channel_com_id, const struct p
 
    NumFilterBanks++;
    return filterBankIdx;
+}
+
+/**
+ * @brief  This function handles CAN1 RX0 request.
+ * @note   The USB IRQ handler is remapped to the USB_LP_IRQHandler in PIOS_SYS_Init().
+ */
+void USB_LP_CAN1_RX0_IRQHandler(void)
+{
+   HandleCANRx(&can_dev->cfg->regs->RF0R, 0);
+}
+
+/**
+ * @brief  This function handles can_dev->cfg->regs RX1 request.
+ */
+void CAN1_RX1_IRQHandler(void)
+{
+   HandleCANRx(&can_dev->cfg->regs->RF1R, 1);
+}
+
+/**
+ * @brief  This function handles CAN1 TX interrupt and sends more data if available
+ */
+void USB_HP_CAN1_TX_IRQHandler(void)
+{
+   can_dev->cfg->regs->TSR = CAN_TSR_RQCP0 | CAN_TSR_RQCP1 | CAN_TSR_RQCP2; // Acknowledge interrupt
+
+   bool tx_need_yield = false;
+
+   // There a 3 TX mailboxes. Write up to three mailboxes, if empty.
+   for (int i = 0; (can_dev->cfg->regs->TSR & CAN_TSR_TME) && i < 3; ++i)
+   {
+      // Any of the 3 TX mailboxes is empty
+
+      bool yield = false;
+
+      CanMsg msg;
+
+      bool ret = UnQueueCANTxMsg(&msg, &yield);
+      tx_need_yield |= yield;
+      if (!ret)
+      {
+         can_dev->cfg->regs->IER &= ~CAN_IER_TMEIE; // Disable interrupt
+         break;
+      }
+
+      // Send message to hardware
+      SendCANMsg(&msg, (can_dev->cfg->regs->TSR & CAN_TSR_CODE) >> 24);
+   }
+
+   portEND_SWITCHING_ISR(tx_need_yield);
 }
 
 #endif /* PIOS_INCLUDE_CAN */

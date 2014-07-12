@@ -59,7 +59,11 @@ struct pios_can_channel
    pios_com_callback rx_in_cb;
 };
 
-#define CAN_DEBUG_Assert(test) if (!(test)) PIOS_DEBUG_AssertFailed(__FILE__, __LINE__);
+#if 0
+#define CAN_DEBUG_Assert(test) if (!(test)) PIOS_DEBUG_AssertFailed(__FILE__, __LINE__)
+#else
+#define CAN_DEBUG_Assert(test) /* NOOP */
+#endif
 #define CAN_Assert(test) PIOS_DEBUG_Assert(test)
 
 /**

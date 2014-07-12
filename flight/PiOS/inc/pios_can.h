@@ -51,6 +51,7 @@ struct pios_can_msgheader
   uint32_t CanId;       /*!< Specifies the standard or extended identifier.
                            This parameter can be a value between 0 to 0x7FF (standard)
                            or between 0 to 0x1FFFFFFF (extended). */
+
   struct
   {
      uint8_t IDE:1;     /*!< Specifies the type of identifier for the message that
